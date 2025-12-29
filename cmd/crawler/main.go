@@ -1,26 +1,31 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/jdpolicano/go-vec-search/internal/crawler"
-	"github.com/pemistahl/lingua-go"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
+	"github.com/jdpolicano/go-search/internal/crawler"
+	"github.com/jdpolicano/go-search/internal/extract/language"
+	"github.com/jdpolicano/go-search/internal/store"
 )
 
-func isATag(n *html.Node) bool {
-	return n.Type == html.ElementNode && n.DataAtom == atom.A
-}
-
 func main() {
+	s, err := store.NewStore("db/store.db")
+	if err != nil {
+		fmt.Printf("Error creating store: %s\n", err)
+		return
+	}
 	seeds := []string{"https://en.wikipedia.org/wiki/Computer_science"}
-	supportedLangs := []lingua.Language{lingua.English}
+	supportedLangs := []language.Language{language.English}
 	wg := sync.WaitGroup{}
-	index := crawler.NewIndex(seeds, supportedLangs, &wg)
+	index, err := crawler.NewIndex(s, seeds, supportedLangs, &wg)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	go index.Run()
-	time.Sleep(30 * time.Second)
+	time.Sleep(60 * time.Second)
 	index.Close()
 	wg.Wait()
 }

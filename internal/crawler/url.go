@@ -2,87 +2,82 @@ package crawler
 
 import (
 	"fmt"
-	"net/url"
-	"sort"
-	"strings"
 	"sync"
+
+	"github.com/jdpolicano/go-search/internal/queue"
+	"github.com/jdpolicano/go-search/internal/store"
 )
 
-type QueueItem struct {
-	url  string
-	href string
-}
-
-func (qi QueueItem) String() string {
-	return fmt.Sprintf("{Url: %s Href %s}", qi.url, qi.href)
-}
-
 type CrawlQueue struct {
-	queue   []string
-	in      chan []QueueItem // data into the queue, for a bfs queue.
-	out     chan string      // send an item along the queue
-	visited map[string]bool  // we don't want to produce url's we've already seen
-	wg      *sync.WaitGroup
+	queue queue.Queue[store.FrontierItem]
+	in    chan []store.FrontierItem // data into the queue, for a bfs queue.
+	out   chan store.FrontierItem   // send an item along the queue
+	wg    *sync.WaitGroup
 }
 
-func NewCrawlQueue(seeds []string, wg *sync.WaitGroup) *CrawlQueue {
-	in, out := make(chan []QueueItem), make(chan string)
-	visited := make(map[string]bool)
-	return &CrawlQueue{seeds, in, out, visited, wg}
+func NewCrawlQueue(s *store.Store, seeds []string, wg *sync.WaitGroup) (*CrawlQueue, error) {
+	queue, err := queue.NewSqlQueue(s, 1024, seeds)
+	if err != nil {
+		return nil, err
+	}
+	in, out := make(chan []store.FrontierItem), make(chan store.FrontierItem)
+	return &CrawlQueue{queue, in, out, wg}, nil
 }
 
 func (cq *CrawlQueue) Run() {
 	defer cq.Close()
-	if len(cq.queue) == 0 {
+	if l, err := cq.queue.Len(); err != nil || l == 0 {
 		return
 	}
 
 	for {
-		var activeOut chan string
-		var top string
+		var activeOut chan store.FrontierItem
+		var top store.FrontierItem
 
-		if len(cq.queue) > 0 {
-			activeOut = cq.out
-			top = cq.queue[0]
-		} else {
-			// Queue is empty: activeOut stays nil, so the 'case activeOut <-'
-			// will be ignored until new items arrive via cq.in.
+		item, err := cq.queue.Dequeue()
+
+		// if there are no items to dequeue, disable output channel
+		if err == queue.ErrorFrontierEmpty {
 			activeOut = nil
+			// if there was another error, log and break
+		} else if err != nil {
+			fmt.Printf("Error dequeueing url: %s\n", err)
+			break
+			// otherwise, set the output channel and top item
+		} else {
+			activeOut = cq.out
+			top = item
 		}
+
 		select {
 		// a url is accepted by the downstream
 		case activeOut <- top:
 			{
-				fmt.Printf("Starting %s\n", top)
-				cq.queue = cq.queue[1:]
+				fmt.Printf("Starting %s\n", top.Url)
 			}
 		case items, ok := <-cq.in:
 			{
 				if !ok {
-					fmt.Printf("Input channel closed, items left %v\n", len(cq.queue))
+					fmt.Println("Queue input channel closed")
+					l, e := cq.queue.Len()
+					if e != nil {
+						fmt.Printf("Error getting length of queue: %s\n", e)
+						return
+					} else {
+						fmt.Printf("Final queue length: %d\n", l)
+					}
 					return
 				}
 
-				urls := make([]string, 0, len(items))
 				for _, item := range items {
-					resolvedUrl, pErr := MakeUrl(item.url, item.href)
-					if pErr != nil {
-						fmt.Printf("Error parsing url %d\n", pErr)
-						continue
-					}
-
-					norm, nErr := normalizeURL(resolvedUrl)
-					if nErr != nil {
-						fmt.Printf("Error normalizing url %d\n", nErr)
-					}
-					if _, seen := cq.visited[norm]; !seen {
-						// fmt.Println("Resolved: ", resolvedUrl)
-						// fmt.Println("Norm:     ", norm)
-						cq.visited[norm] = true
-						urls = append(urls, resolvedUrl)
+					err := cq.queue.Enqueue(item)
+					if err != nil {
+						if !store.ErrorIsConstraintViolation(err) {
+							fmt.Printf("Error enqueueing url %s: %s\n", item.Url, err)
+							continue
+						}
 					}
 				}
-				cq.queue = append(cq.queue, urls...)
 			}
 		}
 	}
@@ -90,52 +85,9 @@ func (cq *CrawlQueue) Run() {
 
 func (cq *CrawlQueue) Close() {
 	fmt.Println("Closing UrlQueue")
+	if err := cq.queue.Close(); err != nil {
+		fmt.Printf("Error closing queue: %s\n", err)
+	}
 	close(cq.out)
 	cq.wg.Done()
-}
-
-// handles resolving relative and absolute urls etc...
-func MakeUrl(baseStr string, href string) (string, error) {
-	// The URL of the page where the link was found
-	base, baseErr := url.Parse(baseStr)
-	if baseErr != nil {
-		return "", fmt.Errorf("Error parsing baseStr: %d", baseErr)
-	}
-	// The path from the <a> href attribute
-	ref, refErr := url.Parse(href)
-	if refErr != nil {
-		return "", fmt.Errorf("Error parsing refUrl: %d", refErr)
-	}
-	// Resolve the reference
-	resolvedUrl := base.ResolveReference(ref).String()
-	return resolvedUrl, nil
-}
-
-func normalizeURL(rawURL string) (string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return "", err
-	}
-
-	// Lowercase scheme and host
-	u.Scheme = strings.ToLower(u.Scheme)
-	u.Host = strings.ToLower(u.Host)
-
-	// Remove fragment
-	u.Fragment = ""
-
-	// Sort query parameters
-	query := u.Query()
-	for key, values := range query {
-		sort.Strings(values)
-		query[key] = values
-	}
-	u.RawQuery = query.Encode()
-
-	// Remove trailing slash if path is not just "/"
-	if u.Path != "/" && strings.HasSuffix(u.Path, "/") {
-		u.Path = strings.TrimSuffix(u.Path, "/")
-	}
-
-	return u.String(), nil
 }

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jdpolicano/go-vec-search/internal/document"
+	"github.com/jdpolicano/go-search/internal/document"
 )
 
 type SearchItem struct {

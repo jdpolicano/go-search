@@ -3,34 +3,32 @@ package crawler
 import (
 	"fmt"
 	"io"
-	"net/url"
-	"strings"
 	"sync"
-	"time"
 
-	"github.com/jdpolicano/go-vec-search/internal/extract"
-	"github.com/pemistahl/lingua-go"
+	"github.com/jdpolicano/go-search/internal/extract"
+	"github.com/jdpolicano/go-search/internal/extract/language"
+	"github.com/jdpolicano/go-search/internal/store"
 	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
-type PageContent struct {
-	url    string
+type ProcessorMessage struct {
+	item   store.FrontierItem
 	reader io.Reader
 }
 
 type Processor struct {
-	in     chan PageContent // accept incoming pages from the crawler
-	queue  chan []QueueItem // push more urls to the queue pipeline
-	index  chan string      // push normalized text input for indexing
+	s      *store.Store
+	in     chan ProcessorMessage     // accept incoming pages from the crawler
+	queue  chan []store.FrontierItem // push more urls to the queue pipeline
+	index  chan IndexMessage         // push normalized text input for indexing
 	wg     *sync.WaitGroup
 	parser *extract.HtmlParser
 }
 
-func NewProcessor(in chan PageContent, queue chan []QueueItem, langs []lingua.Language, wg *sync.WaitGroup) *Processor {
-	index := make(chan string)
+func NewProcessor(s *store.Store, in chan ProcessorMessage, queue chan []store.FrontierItem, langs []language.Language, wg *sync.WaitGroup) *Processor {
+	index := make(chan IndexMessage)
 	parser := extract.NewHtmlParser(langs)
-	return &Processor{in, queue, index, wg, parser}
+	return &Processor{s, in, queue, index, wg, parser}
 }
 
 func (p *Processor) Run() {
@@ -44,28 +42,46 @@ func (p *Processor) Run() {
 
 		doc, parseErr := p.parser.Parse(pc.reader)
 		if parseErr != nil {
-			fmt.Printf("Error processing html from %s: %s\n", pc.url, parseErr)
+			p.handleParseError(pc, parseErr)
 			continue
 		}
-
-		p.recurse(pc, doc)
+		// todo send to render queue
+		p.extractLinks(pc, doc)
+		p.sendToIndex(pc, doc)
 	}
 }
 
-func (p *Processor) recurse(pc PageContent, n *html.Node) {
-	links := make([]QueueItem, 0, 128)
-	extract.DfsNodes(n, isATag, func(a *html.Node) {
-		for _, attr := range a.Attr {
-			if attr.Key == "href" {
-				if !strings.HasPrefix(attr.Val, "#") {
-					qi := QueueItem{pc.url, attr.Val}
-					links = append(links, qi)
-				}
-			}
+func (p *Processor) handleParseError(pc ProcessorMessage, err error) {
+	fmt.Printf("%s: %s\n", pc.item.Url, err)
+	e := p.s.IntoFrontierStore().UpdateStatus(pc.item.UrlNorm, store.StatusFailed)
+	if e != nil {
+		fmt.Printf("Error updating status to failed for %s: %s\n", pc.item.UrlNorm, e)
+	}
+}
+
+func (p *Processor) extractLinks(pc ProcessorMessage, n *html.Node) {
+	links := extract.GetLinks(n)
+	//time.Sleep(250 * time.Millisecond)
+	items := make([]store.FrontierItem, 0, len(links))
+	for _, link := range links {
+		item, err := store.NewFrontierItemFromParent(pc.item, link)
+		if err != nil {
+			fmt.Println(err)
+			continue
 		}
-	})
-	time.Sleep(1 * time.Second)
-	p.queue <- links
+		items = append(items, item)
+	}
+	p.queue <- items
+}
+
+func (p *Processor) sendToIndex(pc ProcessorMessage, n *html.Node) error {
+	textNodeReader := extract.NewTextNodeReader(n)
+	words, err := extract.ScanWords(textNodeReader)
+	if err != nil {
+		return err
+	}
+	p.index <- IndexMessage{pc.item, words}
+	return nil
 }
 
 func (p *Processor) Close() {
@@ -73,23 +89,4 @@ func (p *Processor) Close() {
 	close(p.queue)
 	close(p.index)
 	p.wg.Done()
-}
-
-func printATags(n *html.Node) {
-	extract.DfsNodes(n, isATag, func(a *html.Node) {
-		for _, attr := range a.Attr {
-			if attr.Key == "href" {
-				u, e := url.Parse(attr.Val)
-				if e != nil {
-					fmt.Println(e)
-				}
-
-				fmt.Printf("PATH: %s\n", u.Path)
-			}
-		}
-	})
-}
-
-func isATag(n *html.Node) bool {
-	return n.Type == html.ElementNode && n.DataAtom == atom.A
 }
