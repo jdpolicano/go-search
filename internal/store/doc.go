@@ -17,7 +17,7 @@ type Doc struct {
 
 // upsert a doc with a dummy update to get doc_id on conflict
 // in the future we might want to update title/snippet if they change
-const InsertDocQuery = `INSERT INTO docs (url, len)
+const insertDocQuery = `INSERT INTO docs (url, len)
 VALUES (?, ?)
 ON CONFLICT(url) DO UPDATE SET
 	len = EXCLUDED.len
@@ -77,7 +77,7 @@ func (ds *DocStore) GetByIds(docIds []int) ([]*Doc, error) {
 
 func (ds *DocStore) Insert(url string, len int) (int64, error) {
 	var id int64
-	err := ds.db.QueryRow(InsertDocQuery, url, len).Scan(&id)
+	err := ds.db.QueryRow(insertDocQuery, url, len).Scan(&id)
 	return id, err
 }
 

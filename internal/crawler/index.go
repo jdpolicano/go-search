@@ -36,79 +36,43 @@ func NewIndex(s *store.Store, seeds []string, langs []language.Language, wg *syn
 
 func (idx *Index) Run() {
 	idx.startWorkflow()
-
-	for {
-		// im, ok := <-processor.index
-		// if !ok {
-		// 	fmt.Println("Index \"in\" channel closed, returning")
-		// 	break
-		// }
-
-	}
+	idx.firstPassage()
+	fmt.Println("run finished")
 }
 
-func (idx *Index) firstPassage(im IndexMessage) {
+func (idx *Index) firstPassage() {
 	docStore := idx.s.IntoDocumentStore()
 	postingStore := idx.s.IntoPostingStore()
+	termStore := idx.s.IntoTermStore()
 	for {
 		im, ok := <-idx.in
 		if !ok {
 			fmt.Println("Index \"in\" channel closed, returning")
 			break
 		}
-
-		doc := store.NewDoc(im.item.Url, len(im.words))
-		docId, err := docStore.Insert(doc)
+		// insert the document into the store and abort if there was an error.
+		docId, err := docStore.Insert(im.item.Url, len(im.words))
 		if err != nil {
 			fmt.Printf("Error inserting document for %s: %s\n", im.item.Url, err)
 			continue
 		}
-		doc.ID = docId
-		// we get the unique terms first so we can update our postings table correctly
-		uniquePostings, err := idx.insertTerms(docId, im.words)
+		// insert the unique terms in the store and get a "term stat" obj.
+		// The term stat obj is a record of the ids for each word and the frequency of each word
+		// that was inserted.
+		termStats, err := termStore.InsertTermsIncDf(im.words)
 		if err != nil {
 			fmt.Printf("Error inserting terms for document for %s: %s\n", im.item.Url, err)
 			continue
 		}
 
-		postings := make([]store.Posting, 0, len(uniquePostings))
-		for _, posting := range uniquePostings {
-			postings = append(postings, posting)
-		}
-
-		err = postingStore.InsertMany(postings)
-		if err != nil {
-			fmt.Printf("Error inserting terms for document for %s: %s\n", im.item.Url, err)
+		// finally, using the term ids, term frequencies, and the doc id, add the postings for this document
+		if err := postingStore.InsertPostingMany(termStats.IntoPostings(docId)); err != nil {
+			fmt.Printf("Error inserting postings for document for %s: %s\n", im.item.Url, err)
+			continue
 		}
 	}
 }
 
-// insert each unique term in this document into the term store
-// we then have a map of every term to its matching term id in the store.
-func (idx *Index) insertTerms(docId int, words []string) (map[string]store.Posting, error) {
-	termStore := idx.s.IntoTermStore()
-	uniquePostings := make(map[string]store.Posting)
-	for _, word := range words {
-		// insert term if it doesn't exist
-		if p, exists := uniquePostings[word]; !exists {
-			termId, err := termStore.Insert(word)
-			if err != nil {
-				fmt.Printf("Error inserting term %s: %s\n", word, err)
-				return nil, err
-			}
-			newP := store.Posting{
-				TermId: termId,
-				DocId:  docId,
-				TFRaw:  1,
-			}
-			uniquePostings[word] = newP
-		} else {
-			p.TFRaw += 1
-			uniquePostings[word] = p
-		}
-	}
-	return uniquePostings, nil
-}
 
 func (idx *Index) startWorkflow() {
 	go idx.queue.Run()
@@ -121,6 +85,8 @@ func (idx *Index) startWorkflow() {
 
 func (idx *Index) Close() {
 	fmt.Println("Closing main Index process")
-	idx.processor.Close() // this should cascade through the pipeline.
+	idx.queue.Close() // this should cascade through the pipeline.
+	idx.crawler.Close()
+	idx.processor.Close()
 	idx.wg.Done()
 }

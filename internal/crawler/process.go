@@ -32,7 +32,6 @@ func NewProcessor(s *store.Store, in chan ProcessorMessage, queue chan []store.F
 }
 
 func (p *Processor) Run() {
-	defer p.Close()
 	for {
 		pc, ok := <-p.in
 		if !ok {

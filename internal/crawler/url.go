@@ -25,7 +25,6 @@ func NewCrawlQueue(s *store.Store, seeds []string, wg *sync.WaitGroup) (*CrawlQu
 }
 
 func (cq *CrawlQueue) Run() {
-	defer cq.Close()
 	if l, err := cq.queue.Len(); err != nil || l == 0 {
 		return
 	}

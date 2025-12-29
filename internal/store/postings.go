@@ -2,16 +2,23 @@ package store
 
 import (
 	"database/sql"
-	"strings"
 )
 
+// upserts a posting
+// safety: it is a requirement that the caller handles any errors due to foreign key constraints being broken here.
+const insertPostingStmt = `INSERT INTO postings (term_id, doc_id, tf_raw)
+VALUES (?, ?, ?)
+ON CONFLICT (term_id, doc_id)
+DO UPDATE SET
+	tf_raw = EXCLUDED.tf_raw;`
+
 type Posting struct {
-	TermId int
-	DocId  int
-	TFRaw  int
+	TermId int64
+	DocId  int64
+	TFRaw  int64
 }
 
-func NewPosting(termId, docId, tfRaw int) Posting {
+func NewPosting(termId, docId, tfRaw int64) Posting {
 	return Posting{termId, docId, tfRaw}
 }
 
@@ -23,79 +30,17 @@ func NewPostingStore(db *sql.DB) *PostingStore {
 	return &PostingStore{db}
 }
 
-func (ps *PostingStore) GetByTermId(termId int) ([]Posting, error) {
-	rows, err := ps.db.Query("SELECT term_id, doc_id, tf_raw FROM postings WHERE term_id = ?", termId)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	postings := make([]Posting, 0)
-	for rows.Next() {
-		var p Posting
-		if err := rows.Scan(&p.TermId, &p.DocId, &p.TFRaw); err != nil {
-			return nil, err
-		}
-		postings = append(postings, p)
-	}
-	return postings, nil
-}
-
-func (ps *PostingStore) GetByTermIds(termIds []int) ([]Posting, error) {
-	if len(termIds) == 0 {
-		return []Posting{}, nil
-	}
-	placeholders := make([]string, len(termIds))
-	args := make([]any, len(termIds))
-	for i, _ := range termIds {
-		placeholders[i] = "?"
-		args[i] = termIds[i]
-	}
-	placeHolderStr := strings.Join(placeholders, ", ")
-	query := "SELECT term_id, doc_id, tf_raw FROM postings WHERE term_id IN (" + placeHolderStr + ")"
-	rows, err := ps.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	postings := make([]Posting, 0)
-	for rows.Next() {
-		var p Posting
-		if err := rows.Scan(&p.TermId, &p.DocId, &p.TFRaw); err != nil {
-			return nil, err
-		}
-		postings = append(postings, p)
-	}
-	return postings, nil
-}
-
-func (ps *PostingStore) GetByDocId(docId int) ([]Posting, error) {
-	rows, err := ps.db.Query("SELECT term_id, doc_id, tf_raw FROM postings WHERE doc_id = ?", docId)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	postings := make([]Posting, 0)
-	for rows.Next() {
-		var p Posting
-		if err := rows.Scan(&p.TermId, &p.DocId, &p.TFRaw); err != nil {
-			return nil, err
-		}
-		postings = append(postings, p)
-	}
-	return postings, nil
-}
-
-func (ps *PostingStore) Insert(p Posting) error {
-	_, err := ps.db.Exec("INSERT INTO postings (term_id, doc_id, tf_raw) VALUES (?, ?, ?)", p.TermId, p.DocId, p.TFRaw)
+func (ps *PostingStore) InsertPosting(termId, docId, tfRaw int64) error {
+	_, err := ps.db.Exec(insertPostingStmt, termId, docId, tfRaw)
 	return err
 }
 
-func (ps *PostingStore) InsertMany(postings []Posting) error {
+func (ps *PostingStore) InsertPostingMany(postings []Posting) error {
 	tx, err := ps.db.Begin()
 	if err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT INTO postings (term_id, doc_id, tf_raw) VALUES (?, ?, ?)")
+	stmt, err := tx.Prepare(insertPostingStmt)
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 
 	"github.com/jdpolicano/go-search/internal/extract/language"
 	"golang.org/x/net/html"
@@ -87,9 +88,7 @@ func (p *HtmlParser) isSupportedLanguageNode(node *html.Node) bool {
 func GetLinks(n *html.Node) []string {
 	links := make([]string, 0, 128)
 	seen := make(map[string]bool)
-	DfsNodes(n, func(node *html.Node) bool {
-		return node.Type == html.ElementNode && node.DataAtom == atom.A
-	}, func(a *html.Node) error {
+	DfsNodes(n, isATag, func(a *html.Node) error {
 		for _, attr := range a.Attr {
 			if attr.Key == "href" {
 				if _, alreadySeen := seen[attr.Val]; !alreadySeen {
@@ -103,13 +102,15 @@ func GetLinks(n *html.Node) []string {
 	return links
 }
 
+func isATag(node *html.Node) bool {
+	return node.Type == html.ElementNode && node.DataAtom == atom.A
+}
+
 func NewTextNodeReader(n *html.Node) io.Reader {
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		DfsNodes(n, func(node *html.Node) bool {
-			return node.Type == html.TextNode
-		}, func(textNode *html.Node) error {
+		DfsNodes(n, isVisibleText, func(textNode *html.Node) error {
 			// todo: should we handle errors here?
 			_, e := pw.Write([]byte(textNode.Data + " "))
 			return e
@@ -118,6 +119,30 @@ func NewTextNodeReader(n *html.Node) io.Reader {
 
 	return pr
 }
+
+func isVisibleText(n *html.Node) bool {
+    // 1. Must be a text node
+    if n.Type != html.TextNode {
+        return false
+    }
+
+    // 2. Check parent to see if it's a "hidden" tag
+    if n.Parent != nil && n.Parent.Type == html.ElementNode {
+        tag := strings.ToLower(n.Parent.Data)
+        // Blacklist tags that contain non-visible text
+        if tag == "script" || tag == "style" || tag == "head" || tag == "noscript" {
+            return false
+        }
+    }
+
+    // 3. (Optional) Filter out nodes that are just whitespace (newlines/tabs)
+    if strings.TrimSpace(n.Data) == "" {
+        return false
+    }
+
+    return true
+}
+
 
 func DfsNodes(n *html.Node, condition func(node *html.Node) bool, cb func(node *html.Node) error) error {
 	if condition(n) {

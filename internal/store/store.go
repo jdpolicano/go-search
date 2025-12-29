@@ -16,7 +16,7 @@ type Store struct {
 }
 
 func NewStore(dbPath string) (*Store, error) {
-	fileUri := fmt.Sprintf("file:%s?_fk=on&cache=shared&mode=rwc", dbPath)
+	fileUri := fmt.Sprintf("file:%s?_fk=on&cache=shared&mode=rwc&_busy_timeout=5000&_journal_mode=WAL", dbPath)
 	db, openErr := sql.Open("sqlite3", fileUri)
 	if openErr != nil {
 		return nil, openErr
@@ -26,6 +26,7 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, execErr
 	}
 
+	db.SetMaxOpenConns(1)
 	return &Store{db}, nil
 }
 

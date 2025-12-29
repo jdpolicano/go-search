@@ -5,6 +5,7 @@ import (
 	"bytes"
 	_ "embed"
 	"io"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -67,7 +68,7 @@ func ScanWords(reader io.Reader) ([]string, error) {
 	words := make([]string, 0, 1024)
 	for scanner.Scan() {
 		word := scanner.Text()
-		if _, isStopWord := stopWords[word]; !isStopWord {
+		if _, isStopWord := stopWords[word]; !isStopWord && !isIntegerWord(word) {
 			words = append(words, strings.ToLower(word))
 		}
 	}
@@ -77,4 +78,10 @@ func ScanWords(reader io.Reader) ([]string, error) {
 	}
 
 	return words, nil
+}
+
+
+func isIntegerWord(w string) bool {
+	_, err := strconv.Atoi(w)
+	return err == nil
 }

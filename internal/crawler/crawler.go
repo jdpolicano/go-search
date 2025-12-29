@@ -20,7 +20,6 @@ func NewCrawler(s *store.Store, in chan store.FrontierItem, wg *sync.WaitGroup) 
 }
 
 func (c *Crawler) Run() {
-	defer c.Close()
 	for {
 		item, ok := <-c.in
 		if !ok {

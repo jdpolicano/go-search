@@ -6,13 +6,21 @@ import (
 	"strings"
 )
 
-// Insert a new term, or do nothing if it already exists.
-// The "do nothing" is implemented as an update that sets the term_raw to itself.
-// This allows us to use the RETURNING clause to get the term_id in both cases.
-const InsertDocTerms = `INSERT INTO terms (raw, df) VALUES (?, 1)
-ON CONFLICT(raw)
-	DO UPDATE SET df = df + 1
+// Insert a new term, guarrenteed to return an id.
+const insertTermIncDfStmt = `INSERT INTO terms (raw) VALUES (?)
+ON CONFLICT(raw) DO UPDATE SET
+	df = terms.df + 1
 RETURNING id;`
+
+// Update the df for a certain term
+const updateDFStmt = `UPDATE terms
+SET df = df + 1
+WHERE id = (?);`
+
+// Update idf for a certain term
+const updateIDFStmt = `UPDATE terms
+SET idf = (?)
+WHERE id = (?);`
 
 type TermItem struct {
 	TermId  int
@@ -24,6 +32,38 @@ type TermItem struct {
 type TermStats struct {
 	IDs map[string]int64
 	TF  map[string]int64
+}
+
+func NewTermStats() TermStats {
+	return TermStats{make(map[string]int64), make(map[string]int64)}
+}
+
+func (ts TermStats) UpsertTF(word string) {
+	if cnt, exists := ts.TF[word]; exists {
+		ts.TF[word] = cnt + 1
+	} else {
+		ts.TF[word] = 1
+	}
+}
+
+func (ts TermStats) AddId(word string, id int64) {
+	ts.IDs[word] = id
+}
+
+func (ts TermStats) HasTermId(word string) bool {
+	_, exists := ts.IDs[word]
+	return exists
+}
+
+
+func (ts TermStats) IntoPostings(docId int64) []Posting {
+	postings := make([]Posting, 0, len(ts.IDs))
+	for term, id := range ts.IDs {
+		freq := ts.TF[term]
+		posting := Posting{id, docId, freq}
+		postings = append(postings, posting)
+	}
+	return postings
 }
 
 type TermStore struct {
@@ -115,58 +155,74 @@ func (ts *TermStore) GetByTermsRaw(termRaws []string) ([]TermItem, error) {
 }
 
 // Inserts multiple terms in a single transaction returning a map of term raw to term id.
-// Duplicates in the input slice are ignored.
-// This function should only be called once per document as reflected in the "docs" table
-// to avoid over incrementing the document frequency (df) of terms.
-func (ts *TermStore) InsertDocTerms(terms []string) (TermStats, error) {
-	termIds := make(map[string]int64, len(terms))
-	termFreqs := make(map[string]int64, len(terms))
+// Duplicates in the input slice are ignored. This query also increments the document frequency for each unique term.
+// It is the requirment of the caller to ensure th
+func (ts *TermStore) InsertTermsIncDf(terms []string) (TermStats, error) {
+	stats := NewTermStats()
 	tx, err := ts.db.Begin()
 	if err != nil {
 		return TermStats{}, err
 	}
-	stmt, err := tx.Prepare(InsertDocTerms)
+	stmt, err := tx.Prepare(insertTermIncDfStmt)
 	if err != nil {
 		return TermStats{}, err
 	}
 	defer stmt.Close()
 	for _, term := range terms {
-		termFreqs[term]++
-		// we can make sure to not insert duplicates in this batch
-		if _, exists := termIds[term]; exists {
+		// first update the terms frequency counter
+		stats.UpsertTF(term)
+
+		// if we already inserted this, no need to increment the df in "term" table again
+		if stats.HasTermId(term) {
 			continue
 		}
+
+		// insert the term and record the terms id in the db.
 		var termId int64
 		if err := stmt.QueryRow(term).Scan(&termId); err != nil {
 			tx.Rollback()
 			return TermStats{}, err
 		}
-		termIds[term] = termId
+		stats.AddId(term, termId)
 	}
-	return TermStats{termIds, termFreqs}, tx.Commit()
+
+	return stats, tx.Commit()
 }
 
-func (ts *TermStore) GetTermIds(terms map[string]int64) error {
-	placeholders := make([]string, 0, len(terms))
-	args := make([]any, 0, len(terms))
-	for word, _ := range terms {
-		placeholders = append(placeholders, "?")
-		args = append(args, word)
-	}
-	placeHolderStr := strings.Join(placeholders, ", ")
-	query := fmt.Sprintf("SELECT term_id, term_raw FROM terms WHERE term_raw IN (%s)", placeHolderStr)
-	rows, err := ts.db.Query(query, args...)
+func (ts *TermStore) IncrementDFMany(termIds map[string]int64) error {
+	tx, err := ts.db.Begin()
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var termId int64
-		var termRaw string
-		if err := rows.Scan(&termId, &termRaw); err != nil {
+	stmt, err := tx.Prepare(updateDFStmt)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range termIds {
+		if _, err := stmt.Exec(id); err != nil {
+			tx.Rollback()
 			return err
 		}
-		terms[termRaw] = termId
 	}
-	return nil
+	return tx.Commit()
+}
+
+func (ts *TermStore) IncrementIDF(termIDFs map[int64]float64) error {
+	tx, err := ts.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(updateIDFStmt)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for id, idf := range termIDFs {
+		if _, err := stmt.Exec(idf, id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }

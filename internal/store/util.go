@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -13,9 +14,25 @@ func ErrorIsConstraintViolation(err error) bool {
 	if err == nil {
 		return false
 	}
-	if sqlite3Err, ok := err.(sqlite3.Error); ok {
+
+	var sqlite3Err sqlite3.Error
+	if errors.As(err, &sqlite3Err) {
 		return sqlite3Err.Code == sqlite3.ErrConstraint
 	}
+
+	return false
+}
+
+func ErrorIsForeignKeyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var sqlite3Err sqlite3.Error
+	if errors.As(err, &sqlite3Err) {
+		return sqlite3Err.ExtendedCode == sqlite3.ErrConstraintForeignKey
+	}
+
 	return false
 }
 
