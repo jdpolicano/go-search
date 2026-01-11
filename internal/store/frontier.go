@@ -1,6 +1,16 @@
 package store
 
-import "database/sql"
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+)
+
+const insertFIBatchStmt = `INSERT INTO frontier (url, url_norm, parent_url, depth, status)
+SELECT fi.url, fi.url_norm, fi.parent_url, fi.depth, fi.status
+FROM unnest($1::text[], $2::text[], $3::text[], $4::int[], $5::int[])
+	 AS fi(url, url_norm, parent_url, depth, status)
+ON CONFLICT (url_norm) DO NOTHING;`
 
 type FrontierStatusEnum int
 
@@ -40,42 +50,34 @@ func NewFrontierItem(url, urlNorm, parentUrl string, depth int, status FrontierS
 	return FrontierItem{url, urlNorm, parentUrl, depth, status}
 }
 
-func (fi FrontierItem) FromRows(row *sql.Rows) error {
+func (fi *FrontierItem) FromRows(row pgx.Rows) error {
 	return row.Scan(&fi.Url, &fi.UrlNorm, &fi.ParentUrl, &fi.Depth, &fi.Status)
 }
 
-func (fi FrontierItem) String() string {
+func (fi *FrontierItem) String() string {
 	return fi.Url
 }
 
-type FrontierStore struct {
-	db *sql.DB
-}
-
-func NewFrontierStore(db *sql.DB) *FrontierStore {
-	return &FrontierStore{db}
-}
-
-func (fs *FrontierStore) GetCount() (int, error) {
+func GetFICount(ctx context.Context, db DBTX) (int, error) {
 	var count int
-	row := fs.db.QueryRow("SELECT COUNT(*) FROM frontier")
+	row := db.QueryRow(ctx, "SELECT COUNT(*) FROM frontier")
 	if err := row.Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
-func (fs *FrontierStore) GetCountByStatus(status FrontierStatusEnum) (int, error) {
+func GetFICountByStatus(ctx context.Context, db DBTX, status FrontierStatusEnum) (int, error) {
 	var count int
-	row := fs.db.QueryRow("SELECT COUNT(*) FROM frontier WHERE status = ?", status)
+	row := db.QueryRow(ctx, "SELECT COUNT(*) FROM frontier WHERE status = $1", status)
 	if err := row.Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
-func (fs *FrontierStore) GetByStatusDepthSorted(status FrontierStatusEnum, limit int) ([]FrontierItem, error) {
-	rows, err := fs.db.Query("SELECT * FROM frontier WHERE status = ? ORDER BY depth ASC LIMIT ?", status, limit)
+func GetFIByStatusDepthSorted(ctx context.Context, db DBTX, status FrontierStatusEnum, limit int) ([]FrontierItem, error) {
+	rows, err := db.Query(ctx, "SELECT * FROM frontier WHERE status = $1 ORDER BY depth ASC LIMIT $2", status, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -90,36 +92,40 @@ func (fs *FrontierStore) GetByStatusDepthSorted(status FrontierStatusEnum, limit
 	return fi[:cnt], nil
 }
 
-func (fs *FrontierStore) Insert(item FrontierItem) error {
-	_, err := fs.db.Exec("INSERT INTO frontier (url, url_norm, parent_url, depth, status) VALUES (?, ?, ?, ?, ?)", item.Url, item.UrlNorm, item.ParentUrl, item.Depth, item.Status)
+func InsertFI(ctx context.Context, db DBTX, item FrontierItem) error {
+	_, err := db.Exec(ctx, "INSERT INTO frontier (url, url_norm, parent_url, depth, status) VALUES ($1, $2, $3, $4, $5)", item.Url, item.UrlNorm, item.ParentUrl, item.Depth, item.Status)
 	return err
 }
 
-func (fs *FrontierStore) InsertMany(items []FrontierItem) error {
-	tx, err := fs.db.Begin()
-	if err != nil {
-		return err
+func InsertFIBatch(ctx context.Context, db DBTX, items []FrontierItem) error {
+	if len(items) == 0 {
+		return nil
 	}
-	stmt, err := tx.Prepare("INSERT INTO frontier (url, url_norm, parent_url, depth, status) VALUES (?, ?, ?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, item := range items {
-		if _, err := stmt.Exec(item.Url, item.UrlNorm, item.ParentUrl, item.Depth, item.Status); err != nil {
-			tx.Rollback()
-			return err
-		}
-	}
-	return tx.Commit()
-}
 
-func (fs *FrontierStore) UpdateStatus(urlNorm string, status FrontierStatusEnum) error {
-	_, err := fs.db.Exec("UPDATE frontier SET status = ? WHERE url_norm = ?", status, urlNorm)
+	urls := make([]string, len(items))
+	urlNorms := make([]string, len(items))
+	parentUrls := make([]string, len(items))
+	depths := make([]int, len(items))
+	statuses := make([]int, len(items))
+
+	for i, fi := range items {
+		urls[i] = fi.Url
+		urlNorms[i] = fi.UrlNorm
+		parentUrls[i] = fi.ParentUrl
+		depths[i] = fi.Depth
+		statuses[i] = int(fi.Status)
+	}
+
+	_, err := db.Exec(ctx, insertFIBatchStmt, urls, urlNorms, parentUrls, depths, statuses)
 	return err
 }
 
-func (fs *FrontierStore) Cleanup() error {
-	_, err := fs.db.Exec("DELETE FROM frontier WHERE status = ?", StatusCompleted)
+func UpdateFIStatus(ctx context.Context, db DBTX, urlNorm string, status FrontierStatusEnum) error {
+	_, err := db.Exec(ctx, "UPDATE frontier SET status = $1 WHERE url_norm = $2", status, urlNorm)
+	return err
+}
+
+func CleanupFrontier(ctx context.Context, db DBTX) error {
+	_, err := db.Exec(ctx, "DELETE FROM frontier WHERE status = $1", StatusCompleted)
 	return err
 }

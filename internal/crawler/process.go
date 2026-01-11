@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sync"
@@ -12,7 +13,9 @@ import (
 )
 
 type ProcessorMessage struct {
-	item   store.FrontierItem
+	fi     store.FrontierItem
+	ctx    context.Context
+	cancel context.CancelFunc
 	reader io.Reader
 }
 
@@ -51,10 +54,10 @@ func (p *Processor) Run() {
 }
 
 func (p *Processor) handleParseError(pc ProcessorMessage, err error) {
-	fmt.Printf("%s: %s\n", pc.item.Url, err)
-	e := p.s.IntoFrontierStore().UpdateStatus(pc.item.UrlNorm, store.StatusFailed)
+	fmt.Printf("%s: %s\n", pc.fi.Url, err)
+	e := p.s.IntoFrontierStore().UpdateStatus(pc.fi.UrlNorm, store.StatusFailed)
 	if e != nil {
-		fmt.Printf("Error updating status to failed for %s: %s\n", pc.item.UrlNorm, e)
+		fmt.Printf("Error updating status to failed for %s: %s\n", pc.fi.UrlNorm, e)
 	}
 }
 
@@ -63,7 +66,7 @@ func (p *Processor) extractLinks(pc ProcessorMessage, n *html.Node) {
 	//time.Sleep(250 * time.Millisecond)
 	items := make([]store.FrontierItem, 0, len(links))
 	for _, link := range links {
-		item, err := store.NewFrontierItemFromParent(pc.item, link)
+		item, err := store.NewFrontierItemFromParent(pc.fi, link)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -79,7 +82,7 @@ func (p *Processor) sendToIndex(pc ProcessorMessage, n *html.Node) error {
 	if err != nil {
 		return err
 	}
-	p.index <- IndexMessage{pc.item, words}
+	p.index <- IndexMessage{pc.fi, pc.ctx, pc.cancel, words}
 	return nil
 }
 

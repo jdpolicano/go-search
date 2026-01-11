@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"errors"
 
 	"github.com/jdpolicano/go-search/internal/store"
@@ -16,12 +17,13 @@ type Queue[T any] interface {
 }
 
 type SqlFrontierQueue struct {
-	fs      *store.FrontierStore
+	ctx     context.Context
+	s       store.Store
 	buffer  []store.FrontierItem
 	bufSize int
 }
 
-func NewSqlQueue(s *store.Store, bufSize int, seeds []string) (*SqlFrontierQueue, error) {
+func NewSqlQueue(ctx context.Context, s store.Store, bufSize int, seeds []string) (*SqlFrontierQueue, error) {
 	if len(seeds) == 0 {
 		return nil, errors.New("seeds cannot be empty")
 	}
@@ -30,7 +32,6 @@ func NewSqlQueue(s *store.Store, bufSize int, seeds []string) (*SqlFrontierQueue
 		return nil, errors.New("number of seeds cannot exceed buffer size")
 	}
 
-	fs := s.IntoFrontierStore()
 	buffer := make([]store.FrontierItem, 0, bufSize)
 	for _, seed := range seeds {
 		fi, err := store.NewFrontierItemFromSeed(seed)
@@ -39,41 +40,61 @@ func NewSqlQueue(s *store.Store, bufSize int, seeds []string) (*SqlFrontierQueue
 		}
 		buffer = append(buffer, fi)
 	}
-	err := fs.InsertMany(buffer)
-	return &SqlFrontierQueue{fs, buffer, bufSize}, err
+
+	return &SqlFrontierQueue{ctx, s, buffer, bufSize}, nil
 }
 
-func (q *SqlFrontierQueue) Enqueue(item store.FrontierItem) error {
-	err := q.fs.Insert(item)
+func (q *SqlFrontierQueue) Enqueue(items ...store.FrontierItem) error {
+	conn, err := q.s.Pool.Acquire(q.ctx)
 	if err != nil {
 		return err
 	}
-	if len(q.buffer) < q.bufSize {
-		q.buffer = append(q.buffer, item)
+	defer conn.Release()
+
+	err = store.InsertFIBatch(q.ctx, conn, items)
+	if err != nil {
+		return err
 	}
+
+	if len(q.buffer) < q.bufSize {
+		// space left in buffer
+		spaceLeft := q.bufSize - len(q.buffer)
+		// only add up to space left
+		end := min(len(items), spaceLeft)
+		// add items to buffer
+		q.buffer = append(q.buffer, items[:end]...)
+	}
+
 	return nil
 }
 
 func (q *SqlFrontierQueue) Dequeue() (store.FrontierItem, error) {
 	if len(q.buffer) == 0 {
-		items, err := q.fs.GetByStatusDepthSorted(store.StatusUnvisited, q.bufSize)
-		if err != nil {
+		if err := q.refill(); err != nil {
 			return store.FrontierItem{}, err
 		}
-		if len(items) == 0 {
-			return store.FrontierItem{}, ErrorFrontierEmpty
-		}
-		q.buffer = append(q.buffer, items...)
 	}
+
+	conn, err := q.s.Pool.Acquire(q.ctx)
+	if err != nil {
+		return store.FrontierItem{}, err
+	}
+	defer conn.Release()
+
 	item := q.buffer[0]
 	item.Status = store.StatusInProgress
-	e := q.fs.UpdateStatus(item.UrlNorm, item.Status)
+	e := store.UpdateFIStatus(q.ctx, conn, item.UrlNorm, item.Status)
 	q.buffer = q.buffer[1:]
 	return item, e
 }
 
 func (q *SqlFrontierQueue) Len() (int, error) {
-	count, err := q.fs.GetCountByStatus(store.StatusUnvisited)
+	conn, err := q.s.Pool.Acquire(q.ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Release()
+	count, err := store.GetFICountByStatus(q.ctx, conn, store.StatusUnvisited)
 	if err != nil {
 		return 0, err
 	}
@@ -81,5 +102,27 @@ func (q *SqlFrontierQueue) Len() (int, error) {
 }
 
 func (q *SqlFrontierQueue) Close() error {
-	return q.fs.Cleanup()
+	conn, err := q.s.Pool.Acquire(q.ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	return store.CleanupFrontier(q.ctx, conn)
+}
+
+// safety: refill buffer if empty, we only call this internally here so its safe to make that assumption
+func (q *SqlFrontierQueue) refill() error {
+	conn, err := q.s.Pool.Acquire(q.ctx)
+	if err != nil {
+		return err
+	}
+	items, err := store.GetFIByStatusDepthSorted(q.ctx, conn, store.StatusUnvisited, q.bufSize)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return ErrorFrontierEmpty
+	}
+	q.buffer = append(q.buffer, items...)
+	return nil
 }

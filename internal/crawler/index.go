@@ -1,16 +1,18 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
-	"github.com/jdpolicano/go-search/internal/extract/language"
 	"github.com/jdpolicano/go-search/internal/store"
 )
 
 type IndexMessage struct {
-	item  store.FrontierItem
-	words []string
+	fi     store.FrontierItem
+	ctx    context.Context
+	cancel context.CancelFunc
+	words  []string
 }
 
 type Index struct {
@@ -22,14 +24,7 @@ type Index struct {
 	wg        *sync.WaitGroup
 }
 
-func NewIndex(s *store.Store, seeds []string, langs []language.Language, wg *sync.WaitGroup) (*Index, error) {
-	queue, err := NewCrawlQueue(s, seeds, wg)
-	if err != nil {
-		fmt.Printf("Error creating CrawlQueue: %s\n", err)
-		return nil, err
-	}
-	crawler := NewCrawler(s, queue.out, wg)
-	processor := NewProcessor(s, crawler.out, queue.in, langs, wg)
+func NewIndex(ctx context.Context, s *store.Store, queue *CrawlQueue, crawler *Crawler, processor *Processor, wg *sync.WaitGroup) (*Index, error) {
 	in := processor.index
 	return &Index{s, queue, crawler, processor, in, wg}, nil
 }
@@ -51,9 +46,9 @@ func (idx *Index) firstPassage() {
 			break
 		}
 		// insert the document into the store and abort if there was an error.
-		docId, err := docStore.Insert(im.item.Url, len(im.words))
+		docId, err := docStore.InsertDoc(im.fi.Url, len(im.words))
 		if err != nil {
-			fmt.Printf("Error inserting document for %s: %s\n", im.item.Url, err)
+			fmt.Printf("Error inserting document for %s: %s\n", im.fi.Url, err)
 			continue
 		}
 		// insert the unique terms in the store and get a "term stat" obj.
@@ -61,18 +56,17 @@ func (idx *Index) firstPassage() {
 		// that was inserted.
 		termStats, err := termStore.InsertTermsIncDf(im.words)
 		if err != nil {
-			fmt.Printf("Error inserting terms for document for %s: %s\n", im.item.Url, err)
+			fmt.Printf("Error inserting terms for document for %s: %s\n", im.fi.Url, err)
 			continue
 		}
 
 		// finally, using the term ids, term frequencies, and the doc id, add the postings for this document
 		if err := postingStore.InsertPostingMany(termStats.IntoPostings(docId)); err != nil {
-			fmt.Printf("Error inserting postings for document for %s: %s\n", im.item.Url, err)
+			fmt.Printf("Error inserting postings for document for %s: %s\n", im.fi.Url, err)
 			continue
 		}
 	}
 }
-
 
 func (idx *Index) startWorkflow() {
 	go idx.queue.Run()

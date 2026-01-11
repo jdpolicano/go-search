@@ -1,16 +1,21 @@
 package store
 
-import (
-	"database/sql"
-)
+import "context"
 
 // upserts a posting
 // safety: it is a requirement that the caller handles any errors due to foreign key constraints being broken here.
 const insertPostingStmt = `INSERT INTO postings (term_id, doc_id, tf_raw)
-VALUES (?, ?, ?)
+VALUES ($1, $2, $3)
 ON CONFLICT (term_id, doc_id)
 DO UPDATE SET
 	tf_raw = EXCLUDED.tf_raw;`
+
+const insertPostingsBatchStmt = `INSERT INTO postings (term_id, doc_id, tf_raw)
+SELECT t.term_id, t.doc_id, t.tf_raw
+FROM unnest($1::int[], $2::int[], $3::int[])
+     AS t(term_id, doc_id, tf_raw)
+ON CONFLICT (term_id, doc_id)
+DO UPDATE SET tf_raw = EXCLUDED.tf_raw;`
 
 type Posting struct {
 	TermId int64
@@ -23,33 +28,27 @@ func NewPosting(termId, docId, tfRaw int64) Posting {
 }
 
 type PostingStore struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewPostingStore(db *sql.DB) *PostingStore {
+func NewPostingStore(db DBTX) *PostingStore {
 	return &PostingStore{db}
 }
 
-func (ps *PostingStore) InsertPosting(termId, docId, tfRaw int64) error {
-	_, err := ps.db.Exec(insertPostingStmt, termId, docId, tfRaw)
+func (ps *PostingStore) InsertPosting(ctx context.Context, termId, docId, tfRaw int64) error {
+	_, err := ps.db.Exec(ctx, insertPostingStmt, termId, docId, tfRaw)
 	return err
 }
 
-func (ps *PostingStore) InsertPostingMany(postings []Posting) error {
-	tx, err := ps.db.Begin()
-	if err != nil {
-		return err
+func (ps *PostingStore) InsertPostingsBatch(ctx context.Context, postings []Posting) error {
+	termIds := make([]int64, len(postings))
+	docIds := make([]int64, len(postings))
+	tfRaws := make([]int64, len(postings))
+	for i, p := range postings {
+		termIds[i] = p.TermId
+		docIds[i] = p.DocId
+		tfRaws[i] = p.TFRaw
 	}
-	stmt, err := tx.Prepare(insertPostingStmt)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, p := range postings {
-		if _, err := stmt.Exec(p.TermId, p.DocId, p.TFRaw); err != nil {
-			tx.Rollback()
-			return err
-		}
-	}
-	return tx.Commit()
+	_, err := ps.db.Exec(ctx, insertPostingsBatchStmt, termIds, docIds, tfRaws)
+	return err
 }

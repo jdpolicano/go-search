@@ -2,15 +2,24 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/jdpolicano/go-search/internal/crawler"
 	"github.com/jdpolicano/go-search/internal/extract/language"
 	"github.com/jdpolicano/go-search/internal/store"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load the .env file
+	err := godotenv.Load()
+	if err != nil {
+		// Log a fatal error if the file cannot be loaded
+		log.Fatalf("Error loading .env file: %s", err)
+	}
+
 	s, err := store.NewStore("db/store.db")
 	if err != nil {
 		fmt.Printf("Error creating store: %s\n", err)

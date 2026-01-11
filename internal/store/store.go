@@ -1,51 +1,34 @@
 package store
 
 import (
-	"database/sql"
+	"context"
 	_ "embed"
-	"fmt"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed schema.sql
-var schemaSQL string
+/**
+ * Interface that joins pgx.Conn and pgx.Tx for easier handling of transactions.
+ * A caller can just pass in either a pgx.Conn or pgx.Tx where a DBTX is expected.
+ */
+type DBTX interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
 
 type Store struct {
-	db *sql.DB
+	Pool *pgxpool.Pool
 }
 
-func NewStore(dbPath string) (*Store, error) {
-	fileUri := fmt.Sprintf("file:%s?_fk=on&cache=shared&mode=rwc&_busy_timeout=5000&_journal_mode=WAL", dbPath)
-	db, openErr := sql.Open("sqlite3", fileUri)
+func NewStore(dbPath string) (Store, error) {
+	ctx := context.Background()
+	pool, openErr := pgxpool.New(ctx, "user=jacobpolicano dbname=gosearch host=/tmp")
 	if openErr != nil {
-		return nil, openErr
+		return Store{}, openErr
 	}
-
-	if _, execErr := db.Exec(schemaSQL); execErr != nil {
-		return nil, execErr
-	}
-
-	db.SetMaxOpenConns(1)
-	return &Store{db}, nil
-}
-
-func (s *Store) IntoFrontierStore() *FrontierStore {
-	return NewFrontierStore(s.db)
-}
-
-func (s *Store) IntoTermStore() *TermStore {
-	return NewTermStore(s.db)
-}
-
-func (s *Store) IntoDocumentStore() *DocStore {
-	return NewDocStore(s.db)
-}
-
-func (s *Store) IntoPostingStore() *PostingStore {
-	return NewPostingStore(s.db)
-}
-
-func (s *Store) Close() error {
-	return s.db.Close()
+	return Store{pool}, nil
 }

@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -9,19 +10,16 @@ import (
 )
 
 type CrawlQueue struct {
-	queue queue.Queue[store.FrontierItem]
-	in    chan []store.FrontierItem // data into the queue, for a bfs queue.
-	out   chan store.FrontierItem   // send an item along the queue
-	wg    *sync.WaitGroup
+	queue   queue.Queue[store.FrontierItem]
+	in      chan []store.FrontierItem // data into the queue, for a bfs queue.
+	out     chan CrawlerMessage       // send an item along the queue
+	wg      *sync.WaitGroup
+	rootCtx context.Context
 }
 
-func NewCrawlQueue(s *store.Store, seeds []string, wg *sync.WaitGroup) (*CrawlQueue, error) {
-	queue, err := queue.NewSqlQueue(s, 1024, seeds)
-	if err != nil {
-		return nil, err
-	}
-	in, out := make(chan []store.FrontierItem), make(chan store.FrontierItem)
-	return &CrawlQueue{queue, in, out, wg}, nil
+func NewCrawlQueue(ctx context.Context, q queue.Queue[store.FrontierItem], wg *sync.WaitGroup) *CrawlQueue {
+	in, out := make(chan []store.FrontierItem), make(chan CrawlerMessage)
+	return &CrawlQueue{q, in, out, wg, ctx}
 }
 
 func (cq *CrawlQueue) Run() {
@@ -30,54 +28,60 @@ func (cq *CrawlQueue) Run() {
 	}
 
 	for {
-		var activeOut chan store.FrontierItem
-		var top store.FrontierItem
+		activeOut, top, err := cq.prepareNextMessage()
 
-		item, err := cq.queue.Dequeue()
-
-		// if there are no items to dequeue, disable output channel
-		if err == queue.ErrorFrontierEmpty {
-			activeOut = nil
-			// if there was another error, log and break
-		} else if err != nil {
-			fmt.Printf("Error dequeueing url: %s\n", err)
+		if err != nil {
 			break
-			// otherwise, set the output channel and top item
-		} else {
-			activeOut = cq.out
-			top = item
 		}
 
 		select {
-		// a url is accepted by the downstream
 		case activeOut <- top:
-			{
-				fmt.Printf("Starting %s\n", top.Url)
-			}
+			cq.handleOutgoingMessage(top)
 		case items, ok := <-cq.in:
-			{
-				if !ok {
-					fmt.Println("Queue input channel closed")
-					l, e := cq.queue.Len()
-					if e != nil {
-						fmt.Printf("Error getting length of queue: %s\n", e)
-						return
-					} else {
-						fmt.Printf("Final queue length: %d\n", l)
-					}
-					return
-				}
-
-				for _, item := range items {
-					err := cq.queue.Enqueue(item)
-					if err != nil {
-						if !store.ErrorIsConstraintViolation(err) {
-							fmt.Printf("Error enqueueing url %s: %s\n", item.Url, err)
-							continue
-						}
-					}
-				}
+			if !ok {
+				cq.handleInputChannelClosed()
+				return
 			}
+			cq.enqueueItems(items)
+		}
+	}
+}
+
+func (cq *CrawlQueue) prepareNextMessage() (chan CrawlerMessage, CrawlerMessage, error) {
+	item, err := cq.queue.Dequeue()
+	if err == queue.ErrorFrontierEmpty {
+		return nil, CrawlerMessage{}, nil
+	} else if err != nil {
+		fmt.Printf("Error dequeueing url: %s\n", err)
+		return nil, CrawlerMessage{}, err
+	}
+
+	return cq.out, CrawlerMessage{
+		fi:     item,
+		ctx:    cq.rootCtx,
+		cancel: nil,
+	}, nil
+}
+
+func (cq *CrawlQueue) handleOutgoingMessage(top CrawlerMessage) {
+	fmt.Printf("Starting %s\n", top.fi.Url)
+}
+
+func (cq *CrawlQueue) handleInputChannelClosed() {
+	fmt.Println("Queue input channel closed")
+	l, err := cq.queue.Len()
+	if err != nil {
+		fmt.Printf("Error getting length of queue: %s\n", err)
+	} else {
+		fmt.Printf("Final queue length: %d\n", l)
+	}
+}
+
+func (cq *CrawlQueue) enqueueItems(items []store.FrontierItem) {
+	for _, item := range items {
+		err := cq.queue.Enqueue(item)
+		if err != nil && !store.ErrorIsConstraintViolation(err) {
+			fmt.Printf("Error enqueueing url %s: %s\n", item.Url, err)
 		}
 	}
 }

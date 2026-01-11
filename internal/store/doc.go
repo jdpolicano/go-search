@@ -1,9 +1,8 @@
 package store
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
-	"strings"
 )
 
 type Doc struct {
@@ -18,7 +17,7 @@ type Doc struct {
 // upsert a doc with a dummy update to get doc_id on conflict
 // in the future we might want to update title/snippet if they change
 const insertDocQuery = `INSERT INTO docs (url, len)
-VALUES (?, ?)
+VALUES ($1, $2)
 ON CONFLICT(url) DO UPDATE SET
 	len = EXCLUDED.len
 RETURNING id;`
@@ -33,33 +32,26 @@ func NewDoc(url string, length int) Doc {
 }
 
 type DocStore struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewDocStore(db *sql.DB) *DocStore {
+func NewDocStore(db DBTX) *DocStore {
 	return &DocStore{db}
 }
 
-func (ds *DocStore) GetById(docId int) (*Doc, error) {
+func (ds *DocStore) GetById(ctx context.Context, docId int) (*Doc, error) {
 	var doc Doc
-	row := ds.db.QueryRow("SELECT doc_id, url, title, snippet, len, norm FROM docs WHERE doc_id = ?", docId)
+	row := ds.db.QueryRow(ctx, "SELECT doc_id, url, title, snippet, len, norm FROM docs WHERE doc_id = $1", docId)
 	err := row.Scan(&doc.ID, &doc.Url, &doc.Title, &doc.Snippet, &doc.Len, &doc.Norm)
 	return &doc, err
 }
 
-func (ds *DocStore) GetByIds(docIds []int) ([]*Doc, error) {
+func (ds *DocStore) GetByIds(ctx context.Context, docIds []int) ([]*Doc, error) {
 	if len(docIds) == 0 {
 		return []*Doc{}, nil
 	}
-	placeholders := make([]string, len(docIds))
-	args := make([]any, len(docIds))
-	for i, _ := range docIds {
-		placeholders[i] = "?"
-		args[i] = docIds[i]
-	}
-	placeHolderStr := strings.Join(placeholders, ", ")
-	query := fmt.Sprintf("SELECT id, url, title, snippet, len, norm FROM docs WHERE id IN (%s)", placeHolderStr)
-	rows, err := ds.db.Query(query, args...)
+
+	rows, err := ds.db.Query(ctx, "SELECT id, url, title, snippet, len, norm FROM docs WHERE id = ANY($1)", docIds)
 	if err != nil {
 		return nil, err
 	}
@@ -75,13 +67,13 @@ func (ds *DocStore) GetByIds(docIds []int) ([]*Doc, error) {
 	return docs, nil
 }
 
-func (ds *DocStore) Insert(url string, len int) (int64, error) {
+func (ds *DocStore) InsertDoc(ctx context.Context, url string, len int) (int64, error) {
 	var id int64
-	err := ds.db.QueryRow(insertDocQuery, url, len).Scan(&id)
+	err := ds.db.QueryRow(ctx, insertDocQuery, url, len).Scan(&id)
 	return id, err
 }
 
-func (ds *DocStore) UpdateNorm(docId int, norm float64) error {
-	_, err := ds.db.Exec("UPDATE docs SET norm = ? WHERE id = ?", norm, docId)
+func (ds *DocStore) UpdateNorm(ctx context.Context, docId int, norm float64) error {
+	_, err := ds.db.Exec(ctx, "UPDATE docs SET norm = $1 WHERE id = $2", norm, docId)
 	return err
 }
