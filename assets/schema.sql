@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS terms (
   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   raw TEXT NOT NULL UNIQUE,
-  df INTEGER DEFAULT 1, -- document frequency
+  df INTEGER, -- document frequency
   idf REAL -- inverse document frequency
 );
 
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS docs (
   title TEXT,
   snippet TEXT,
   len INTEGER NOT NULL, -- number of terms in the document
-  norm REAL -- magnitude for normalization
+  norm REAL -- magnitude (vector length) for normalization
 );
 
 CREATE TABLE IF NOT EXISTS postings (

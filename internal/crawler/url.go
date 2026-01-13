@@ -10,19 +10,21 @@ import (
 )
 
 type CrawlQueue struct {
-	queue   queue.Queue[store.FrontierItem]
-	in      chan []store.FrontierItem // data into the queue, for a bfs queue.
-	out     chan CrawlerMessage       // send an item along the queue
-	wg      *sync.WaitGroup
-	rootCtx context.Context
+	queue  queue.Queue[store.FrontierItem]
+	in     chan []store.FrontierItem // data into the queue, for a bfs queue.
+	out    chan CrawlerMessage       // send an item along the queue
+	wg     *sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func NewCrawlQueue(ctx context.Context, q queue.Queue[store.FrontierItem], wg *sync.WaitGroup) *CrawlQueue {
-	in, out := make(chan []store.FrontierItem), make(chan CrawlerMessage)
-	return &CrawlQueue{q, in, out, wg, ctx}
+func NewCrawlQueue(ctx context.Context, cancel context.CancelFunc, q queue.Queue[store.FrontierItem], wg *sync.WaitGroup) *CrawlQueue {
+	in, out := make(chan []store.FrontierItem, 100), make(chan CrawlerMessage, 100)
+	return &CrawlQueue{q, in, out, wg, ctx, cancel}
 }
 
 func (cq *CrawlQueue) Run() {
+	defer cq.wg.Done()
 	if l, err := cq.queue.Len(); err != nil || l == 0 {
 		return
 	}
@@ -35,11 +37,15 @@ func (cq *CrawlQueue) Run() {
 		}
 
 		select {
+		case <-cq.ctx.Done():
+			fmt.Println("CrawlQueue work canceled, returning")
+			return
 		case activeOut <- top:
 			cq.handleOutgoingMessage(top)
 		case items, ok := <-cq.in:
 			if !ok {
 				cq.handleInputChannelClosed()
+				cq.cancel()
 				return
 			}
 			cq.enqueueItems(items)
@@ -57,9 +63,7 @@ func (cq *CrawlQueue) prepareNextMessage() (chan CrawlerMessage, CrawlerMessage,
 	}
 
 	return cq.out, CrawlerMessage{
-		fi:     item,
-		ctx:    cq.rootCtx,
-		cancel: nil,
+		fi: item,
 	}, nil
 }
 
@@ -80,8 +84,11 @@ func (cq *CrawlQueue) handleInputChannelClosed() {
 func (cq *CrawlQueue) enqueueItems(items []store.FrontierItem) {
 	for _, item := range items {
 		err := cq.queue.Enqueue(item)
-		if err != nil && !store.ErrorIsConstraintViolation(err) {
-			fmt.Printf("Error enqueueing url %s: %s\n", item.Url, err)
+		if err != nil {
+			if !store.ErrorIsUniqueViolation(err) {
+				fmt.Printf("Error enqueueing url %s: %s\n", item.Url, err)
+			}
+			continue
 		}
 	}
 }

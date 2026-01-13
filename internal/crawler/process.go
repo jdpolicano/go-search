@@ -9,60 +9,96 @@ import (
 	"github.com/jdpolicano/go-search/internal/extract"
 	"github.com/jdpolicano/go-search/internal/extract/language"
 	"github.com/jdpolicano/go-search/internal/store"
-	"golang.org/x/net/html"
 )
 
 type ProcessorMessage struct {
 	fi     store.FrontierItem
-	ctx    context.Context
-	cancel context.CancelFunc
 	reader io.Reader
 }
 
 type Processor struct {
-	s      *store.Store
 	in     chan ProcessorMessage     // accept incoming pages from the crawler
 	queue  chan []store.FrontierItem // push more urls to the queue pipeline
 	index  chan IndexMessage         // push normalized text input for indexing
 	wg     *sync.WaitGroup
 	parser *extract.HtmlParser
+	s      store.Store
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func NewProcessor(s *store.Store, in chan ProcessorMessage, queue chan []store.FrontierItem, langs []language.Language, wg *sync.WaitGroup) *Processor {
-	index := make(chan IndexMessage)
+func NewProcessor(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan ProcessorMessage, queue chan []store.FrontierItem, langs []language.Language, wg *sync.WaitGroup) *Processor {
+	index := make(chan IndexMessage, 100)
 	parser := extract.NewHtmlParser(langs)
-	return &Processor{s, in, queue, index, wg, parser}
+	return &Processor{in, queue, index, wg, parser, s, ctx, cancel}
 }
 
 func (p *Processor) Run() {
+	defer p.wg.Done()
 	for {
-		pc, ok := <-p.in
-		if !ok {
-			fmt.Println("Processor \"in\" channel closed")
+		select {
+		case <-p.ctx.Done():
+			fmt.Println("processor work canceled, quitting")
 			return
+		case pc, ok := <-p.in:
+			if !ok {
+				fmt.Println("Processor \"in\" channel closed")
+				p.cancel()
+				return
+			}
+			p.processMessage(pc)
 		}
-
-		doc, parseErr := p.parser.Parse(pc.reader)
-		if parseErr != nil {
-			p.handleParseError(pc, parseErr)
-			continue
-		}
-		// todo send to render queue
-		p.extractLinks(pc, doc)
-		p.sendToIndex(pc, doc)
 	}
 }
 
-func (p *Processor) handleParseError(pc ProcessorMessage, err error) {
-	fmt.Printf("%s: %s\n", pc.fi.Url, err)
-	e := p.s.IntoFrontierStore().UpdateStatus(pc.fi.UrlNorm, store.StatusFailed)
+func (p *Processor) processMessage(pm ProcessorMessage) {
+	doc, parseErr := p.parser.Parse(pm.reader)
+	if parseErr != nil {
+		p.handleError(pm, parseErr)
+		return
+	}
+
+	extracted, err := extract.ProcessHtmlDocument(doc)
+	if err != nil {
+		p.handleError(pm, err)
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	// send to index
+	go p.sendToIndex(pm, extracted, &wg)
+	// send to queue
+	go p.sendToQueue(pm, extracted, &wg)
+	// wait for both to be accepted before moving on.
+	wg.Wait()
+}
+
+func (p *Processor) handleError(pm ProcessorMessage, err error) {
+	fmt.Printf("%s: %s\n", pm.fi.Url, err)
+	conn, e := p.s.Pool.Acquire(p.ctx)
 	if e != nil {
-		fmt.Printf("Error updating status to failed for %s: %s\n", pc.fi.UrlNorm, e)
+		fmt.Printf("Error acquiring connection to update status for %s: %s\n", pm.fi.UrlNorm, e)
+		return
+	}
+	defer conn.Release()
+	e = store.UpdateFIStatus(p.ctx, conn, pm.fi.UrlNorm, store.StatusFailed)
+	if e != nil {
+		fmt.Printf("Error updating status to failed for %s: %s\n", pm.fi.UrlNorm, e)
 	}
 }
 
-func (p *Processor) extractLinks(pc ProcessorMessage, n *html.Node) {
-	links := extract.GetLinks(n)
+func (p *Processor) getIndexMessage(pm ProcessorMessage, extracted extract.Extracted) IndexMessage {
+	return IndexMessage{
+		entry: store.IndexEntry{
+			Url:       pm.fi.Url,
+			Len:       extracted.Len,
+			TermFreqs: extracted.TermFreqs,
+		},
+	}
+}
+
+func (p *Processor) getFrontierMessages(pc ProcessorMessage, links []string) []store.FrontierItem {
 	//time.Sleep(250 * time.Millisecond)
 	items := make([]store.FrontierItem, 0, len(links))
 	for _, link := range links {
@@ -73,17 +109,31 @@ func (p *Processor) extractLinks(pc ProcessorMessage, n *html.Node) {
 		}
 		items = append(items, item)
 	}
-	p.queue <- items
+
+	return items
 }
 
-func (p *Processor) sendToIndex(pc ProcessorMessage, n *html.Node) error {
-	textNodeReader := extract.NewTextNodeReader(n)
-	words, err := extract.ScanWords(textNodeReader)
-	if err != nil {
-		return err
+func (p *Processor) sendToIndex(pm ProcessorMessage, extracted extract.Extracted, wg *sync.WaitGroup) error {
+	msg := p.getIndexMessage(pm, extracted)
+	select {
+	case <-p.ctx.Done():
+		fmt.Println("Processor context done, not sending to index")
+	case p.index <- msg:
+		fmt.Printf("Processor sent %d words to index from %s\n", extracted.Len, pm.fi.Url)
 	}
-	p.index <- IndexMessage{pc.fi, pc.ctx, pc.cancel, words}
+	wg.Done()
 	return nil
+}
+
+func (p *Processor) sendToQueue(pm ProcessorMessage, ex extract.Extracted, wg *sync.WaitGroup) {
+	msgs := p.getFrontierMessages(pm, ex.Links)
+	select {
+	case <-p.ctx.Done():
+		fmt.Println("Processor context done, not sending to queue")
+	case p.queue <- msgs:
+		fmt.Printf("Processor sent %d new urls to queue from %s\n", len(msgs), pm.fi.Url)
+	}
+	wg.Done()
 }
 
 func (p *Processor) Close() {

@@ -10,7 +10,8 @@ const insertFIBatchStmt = `INSERT INTO frontier (url, url_norm, parent_url, dept
 SELECT fi.url, fi.url_norm, fi.parent_url, fi.depth, fi.status
 FROM unnest($1::text[], $2::text[], $3::text[], $4::int[], $5::int[])
 	 AS fi(url, url_norm, parent_url, depth, status)
-ON CONFLICT (url_norm) DO NOTHING;`
+ON CONFLICT (url_norm) DO NOTHING
+RETURNING url, url_norm, parent_url, depth, status;`
 
 type FrontierStatusEnum int
 
@@ -50,12 +51,8 @@ func NewFrontierItem(url, urlNorm, parentUrl string, depth int, status FrontierS
 	return FrontierItem{url, urlNorm, parentUrl, depth, status}
 }
 
-func (fi *FrontierItem) FromRows(row pgx.Rows) error {
-	return row.Scan(&fi.Url, &fi.UrlNorm, &fi.ParentUrl, &fi.Depth, &fi.Status)
-}
-
-func (fi *FrontierItem) String() string {
-	return fi.Url
+func (fi *FrontierItem) FromRows(rows pgx.Rows) error {
+	return rows.Scan(&fi.Url, &fi.UrlNorm, &fi.ParentUrl, &fi.Depth, &fi.Status)
 }
 
 func GetFICount(ctx context.Context, db DBTX) (int, error) {
@@ -76,20 +73,12 @@ func GetFICountByStatus(ctx context.Context, db DBTX, status FrontierStatusEnum)
 	return count, nil
 }
 
-func GetFIByStatusDepthSorted(ctx context.Context, db DBTX, status FrontierStatusEnum, limit int) ([]FrontierItem, error) {
+func GetFIByStatusDepthSorted(ctx context.Context, db DBTX, status FrontierStatusEnum, limit int) (pgx.Rows, error) {
 	rows, err := db.Query(ctx, "SELECT * FROM frontier WHERE status = $1 ORDER BY depth ASC LIMIT $2", status, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	fi := make([]FrontierItem, limit)
-	cnt := 0
-	for ; rows.Next(); cnt++ {
-		if err := (&fi[cnt]).FromRows(rows); err != nil {
-			return nil, err
-		}
-	}
-	return fi[:cnt], nil
+	return rows, nil
 }
 
 func InsertFI(ctx context.Context, db DBTX, item FrontierItem) error {
@@ -97,11 +86,7 @@ func InsertFI(ctx context.Context, db DBTX, item FrontierItem) error {
 	return err
 }
 
-func InsertFIBatch(ctx context.Context, db DBTX, items []FrontierItem) error {
-	if len(items) == 0 {
-		return nil
-	}
-
+func InsertFIBatch(ctx context.Context, db DBTX, items []FrontierItem) ([]FrontierItem, error) {
 	urls := make([]string, len(items))
 	urlNorms := make([]string, len(items))
 	parentUrls := make([]string, len(items))
@@ -116,8 +101,20 @@ func InsertFIBatch(ctx context.Context, db DBTX, items []FrontierItem) error {
 		statuses[i] = int(fi.Status)
 	}
 
-	_, err := db.Exec(ctx, insertFIBatchStmt, urls, urlNorms, parentUrls, depths, statuses)
-	return err
+	rows, err := db.Query(ctx, insertFIBatchStmt, urls, urlNorms, parentUrls, depths, statuses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var insertedItems []FrontierItem
+	for rows.Next() {
+		var fi FrontierItem
+		if err := fi.FromRows(rows); err != nil {
+			return nil, err
+		}
+		insertedItems = append(insertedItems, fi)
+	}
+	return insertedItems, nil
 }
 
 func UpdateFIStatus(ctx context.Context, db DBTX, urlNorm string, status FrontierStatusEnum) error {

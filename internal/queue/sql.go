@@ -10,7 +10,7 @@ import (
 var ErrorFrontierEmpty = errors.New("frontier queue is empty")
 
 type Queue[T any] interface {
-	Enqueue(item T) error
+	Enqueue(item ...T) error
 	Dequeue() (T, error)
 	Len() (int, error)
 	Close() error
@@ -33,14 +33,6 @@ func NewSqlQueue(ctx context.Context, s store.Store, bufSize int, seeds []string
 	}
 
 	buffer := make([]store.FrontierItem, 0, bufSize)
-	for _, seed := range seeds {
-		fi, err := store.NewFrontierItemFromSeed(seed)
-		if err != nil {
-			return nil, err
-		}
-		buffer = append(buffer, fi)
-	}
-
 	return &SqlFrontierQueue{ctx, s, buffer, bufSize}, nil
 }
 
@@ -51,7 +43,7 @@ func (q *SqlFrontierQueue) Enqueue(items ...store.FrontierItem) error {
 	}
 	defer conn.Release()
 
-	err = store.InsertFIBatch(q.ctx, conn, items)
+	items, err = store.InsertFIBatch(q.ctx, conn, items)
 	if err != nil {
 		return err
 	}
@@ -116,13 +108,26 @@ func (q *SqlFrontierQueue) refill() error {
 	if err != nil {
 		return err
 	}
-	items, err := store.GetFIByStatusDepthSorted(q.ctx, conn, store.StatusUnvisited, q.bufSize)
+
+	rows, err := store.GetFIByStatusDepthSorted(q.ctx, conn, store.StatusUnvisited, q.bufSize)
 	if err != nil {
 		return err
 	}
+
+	defer rows.Close()
+	items := make([]store.FrontierItem, 0, q.bufSize)
+	for rows.Next() {
+		var fi store.FrontierItem
+		if err := fi.FromRows(rows); err != nil {
+			return err
+		}
+		items = append(items, fi)
+	}
+
 	if len(items) == 0 {
 		return ErrorFrontierEmpty
 	}
+
 	q.buffer = append(q.buffer, items...)
 	return nil
 }

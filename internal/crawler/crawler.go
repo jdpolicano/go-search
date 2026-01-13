@@ -9,44 +9,57 @@ import (
 )
 
 type CrawlerMessage struct {
-	fi     store.FrontierItem
+	fi store.FrontierItem
+}
+
+type Crawler struct {
+	in     chan CrawlerMessage
+	out    chan ProcessorMessage
+	wg     *sync.WaitGroup
+	s      store.Store
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-type Crawler struct {
-	s   *store.Store
-	in  chan CrawlerMessage
-	out chan ProcessorMessage
-	wg  *sync.WaitGroup
-}
-
-func NewCrawler(s *store.Store, in chan CrawlerMessage, wg *sync.WaitGroup) *Crawler {
-	out := make(chan ProcessorMessage)
-	return &Crawler{s, in, out, wg}
+func NewCrawler(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan CrawlerMessage, wg *sync.WaitGroup) *Crawler {
+	out := make(chan ProcessorMessage, 100)
+	return &Crawler{in, out, wg, s, ctx, cancel}
 }
 
 func (c *Crawler) Run() {
+	defer c.wg.Done()
+
 	for {
-		cm, ok := <-c.in
-		if !ok {
-			fmt.Println("Crawler \"in\" channel closed, returning")
+		select {
+		case <-c.ctx.Done():
+			fmt.Println("Crawler work canceled, returning")
 			return
+		case cm, ok := <-c.in:
+			if !ok {
+				fmt.Println("Crawler \"in\" channel closed, returning")
+				c.cancel()
+				return
+			}
+			fmt.Println("Crawler handling url: ", cm.fi.Url)
+			ioReader, ioErr := GetReaderFromUrl(cm.fi.Url)
+			if ioErr != nil {
+				c.handleIoError(cm, ioErr)
+				continue
+			}
+			c.out <- ProcessorMessage{cm.fi, ioReader}
 		}
-		fmt.Println("Crawler handling url: ", cm.fi.Url)
-		ur := NewUrlResource(cm.fi.Url)
-		ioReader, ioErr := ur.GetReader()
-		if ioErr != nil {
-			c.handleIoError(cm, ioErr)
-			continue
-		}
-		c.out <- ProcessorMessage{cm.fi, cm.ctx, cm.cancel, ioReader}
 	}
 }
 
 func (c *Crawler) handleIoError(cm CrawlerMessage, err error) {
 	fmt.Printf("Error getting reader for %s\n", cm.fi.Url)
-	e := c.s.IntoFrontierStore().UpdateStatus(cm.fi.UrlNorm, store.StatusFailed)
+	conn, err := c.s.Pool.Acquire(c.ctx)
+	if err != nil {
+		fmt.Printf("Error acquiring connection to update status for %s: %s\n", cm.fi.UrlNorm, err)
+		return
+	}
+	defer conn.Release()
+	e := store.UpdateFIStatus(c.ctx, conn, cm.fi.UrlNorm, store.StatusFailed)
 	if e != nil {
 		fmt.Printf("Error updating status to failed for %s: %s\n", cm.fi.UrlNorm, e)
 	}

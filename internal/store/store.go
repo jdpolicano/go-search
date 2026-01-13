@@ -26,7 +26,7 @@ type Store struct {
 
 func NewStore(dbPath string) (Store, error) {
 	ctx := context.Background()
-	pool, openErr := pgxpool.New(ctx, "user=jacobpolicano dbname=gosearch host=/tmp")
+	pool, openErr := pgxpool.New(ctx, "user=postgres dbname=gosearch host=/tmp")
 	if openErr != nil {
 		return Store{}, openErr
 	}

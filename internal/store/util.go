@@ -7,52 +7,52 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mattn/go-sqlite3"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-func ErrorIsConstraintViolation(err error) bool {
+func ErrorIsUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	var sqlite3Err sqlite3.Error
-	if errors.As(err, &sqlite3Err) {
-		return sqlite3Err.Code == sqlite3.ErrConstraint
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		if pgErr.Code == pgerrcode.UniqueViolation {
+			return true
+		}
 	}
 
 	return false
 }
 
-func ErrorIsForeignKeyViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var sqlite3Err sqlite3.Error
-	if errors.As(err, &sqlite3Err) {
-		return sqlite3Err.ExtendedCode == sqlite3.ErrConstraintForeignKey
-	}
-
-	return false
-}
-
-// handles resolving relative and absolute urls etc...
+// MakeUrl constructs an absolute URL by resolving a relative URL (href) against a base URL (baseStr).
 func MakeUrl(baseStr string, href string) (string, error) {
-	// The URL of the page where the link was found
+	// Parse the base URL, which represents the page where the link was found
 	base, baseErr := url.Parse(baseStr)
 	if baseErr != nil {
-		return "", fmt.Errorf("Error parsing baseStr: %d", baseErr)
+		return "", fmt.Errorf("Error parsing baseStr: %v", baseErr)
 	}
-	// The path from the <a> href attribute
+
+	// Parse the href, which is the path or URL from the <a> href attribute
 	ref, refErr := url.Parse(href)
 	if refErr != nil {
-		return "", fmt.Errorf("Error parsing refUrl: %d", refErr)
+		return "", fmt.Errorf("Error parsing href: %v", refErr)
 	}
-	// Resolve the reference
+
+	// Resolve the href relative to the base URL
 	resolvedUrl := base.ResolveReference(ref).String()
 	return resolvedUrl, nil
 }
 
+// Normalizes a URL by:
+// - Lowercasing the scheme and host
+// - Removing the fragment
+// - Sorting query parameters
+// - Removing trailing slash (if path is not just "/")
+//
+// This is the primary key for the 'frontier' table that is used to avoid
+// crawling the same URL multiple times.
 func NormalizeURL(rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {

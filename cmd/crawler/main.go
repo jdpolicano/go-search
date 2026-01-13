@@ -1,24 +1,23 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/jdpolicano/go-search/internal/crawler"
 	"github.com/jdpolicano/go-search/internal/extract/language"
 	"github.com/jdpolicano/go-search/internal/store"
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Load the .env file
-	err := godotenv.Load()
-	if err != nil {
-		// Log a fatal error if the file cannot be loaded
-		log.Fatalf("Error loading .env file: %s", err)
-	}
+	// // Load the .env file
+	// err := godotenv.Load()
+	// if err != nil {
+	// 	// Log a fatal error if the file cannot be loaded
+	// 	log.Fatalf("Error loading .env file: %s", err)
+	// }
 
 	s, err := store.NewStore("db/store.db")
 	if err != nil {
@@ -56,13 +55,16 @@ func main() {
 	}
 	supportedLangs := []language.Language{language.English}
 	wg := sync.WaitGroup{}
-	index, err := crawler.NewIndex(s, seeds, supportedLangs, &wg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	index, err := crawler.NewIndex(ctx, cancel, s, seeds, supportedLangs, &wg)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	fmt.Println("Starting crawler...")
 	go index.Run()
-	time.Sleep(60 * time.Second * 3)
-	index.Close()
+	time.Sleep(60 * time.Second * 10)
+	cancel()
 	wg.Wait()
 }

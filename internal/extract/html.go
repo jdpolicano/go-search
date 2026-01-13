@@ -88,7 +88,7 @@ func (p *HtmlParser) isSupportedLanguageNode(node *html.Node) bool {
 func GetLinks(n *html.Node) []string {
 	links := make([]string, 0, 128)
 	seen := make(map[string]bool)
-	DfsNodes(n, isATag, func(a *html.Node) error {
+	DfsNodes(n, func(a *html.Node) error {
 		for _, attr := range a.Attr {
 			if attr.Key == "href" {
 				if _, alreadySeen := seen[attr.Val]; !alreadySeen {
@@ -110,7 +110,10 @@ func NewTextNodeReader(n *html.Node) io.Reader {
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		DfsNodes(n, isVisibleText, func(textNode *html.Node) error {
+		DfsNodes(n, func(textNode *html.Node) error {
+			if !isVisibleText(textNode) {
+				return nil
+			}
 			// todo: should we handle errors here?
 			_, e := pw.Write([]byte(textNode.Data + " "))
 			return e
@@ -121,39 +124,42 @@ func NewTextNodeReader(n *html.Node) io.Reader {
 }
 
 func isVisibleText(n *html.Node) bool {
-    // 1. Must be a text node
-    if n.Type != html.TextNode {
-        return false
-    }
+	// 1. Must be a text node
+	if n.Type != html.TextNode {
+		return false
+	}
 
-    // 2. Check parent to see if it's a "hidden" tag
-    if n.Parent != nil && n.Parent.Type == html.ElementNode {
-        tag := strings.ToLower(n.Parent.Data)
-        // Blacklist tags that contain non-visible text
-        if tag == "script" || tag == "style" || tag == "head" || tag == "noscript" {
-            return false
-        }
-    }
+	// 2. Check parent to see if it's a "hidden" tag
+	if n.Parent != nil && n.Parent.Type == html.ElementNode {
+		tag := strings.ToLower(n.Parent.Data)
+		// Blacklist tags that contain non-visible text
+		if tag == "script" || tag == "style" || tag == "head" || tag == "noscript" {
+			return false
+		}
+	}
 
-    // 3. (Optional) Filter out nodes that are just whitespace (newlines/tabs)
-    if strings.TrimSpace(n.Data) == "" {
-        return false
-    }
+	// 3. (Optional) Filter out nodes that are just whitespace (newlines/tabs)
+	if strings.TrimSpace(n.Data) == "" {
+		return false
+	}
 
-    return true
+	return true
 }
 
+func DfsNodes(n *html.Node, cb func(node *html.Node) error) error {
+	if n == nil {
+		return nil
+	}
 
-func DfsNodes(n *html.Node, condition func(node *html.Node) bool, cb func(node *html.Node) error) error {
-	if condition(n) {
-		if err := cb(n); err != nil {
-			return err
-		}
+	if err := cb(n); err != nil {
+		return err
 	}
+
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if err := DfsNodes(c, condition, cb); err != nil {
+		if err := DfsNodes(c, cb); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }

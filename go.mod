@@ -7,6 +7,7 @@ require golang.org/x/net v0.48.0
 require github.com/mattn/go-sqlite3 v1.14.32
 
 require (
+	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.8.0 // indirect

@@ -80,6 +80,9 @@ func ScanWords(reader io.Reader) ([]string, error) {
 	return words, nil
 }
 
+func ScanWordsFromString(s string) ([]string, error) {
+	return ScanWords(strings.NewReader(s))
+}
 
 func isIntegerWord(w string) bool {
 	_, err := strconv.Atoi(w)

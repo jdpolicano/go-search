@@ -6,25 +6,10 @@ import (
 	"net/http"
 )
 
-// Defines a remote resource.
-type Resource interface {
-	GetReader() (io.Reader, error)
-	// this is the formal path of the Resource, generic over different resource types
-	Name() string
-}
-
-type UrlResource struct {
-	url string
-}
-
-func NewUrlResource(url string) *UrlResource {
-	return &UrlResource{url}
-}
-
-func (u *UrlResource) GetReader() (io.Reader, error) {
+func GetReaderFromUrl(url string) (io.Reader, error) {
 	client := &http.Client{}
 	// 1. Create a new request
-	req, _ := http.NewRequest("GET", u.url, nil)
+	req, _ := http.NewRequest("GET", url, nil)
 	// 2. Set a User-Agent header (required by Wikipedia)
 	// Format: <MyBotName>/<Version> (contact information)
 	req.Header.Set("User-Agent", "MyGoScraper/1.0 (jdpolicano@gmail.com)")
@@ -38,8 +23,4 @@ func (u *UrlResource) GetReader() (io.Reader, error) {
 	}
 
 	return response.Body, nil
-}
-
-func (u *UrlResource) Name() string {
-	return u.url
 }
