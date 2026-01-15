@@ -49,6 +49,7 @@ func main() {
 		"https://en.wikipedia.org/wiki/JSON",
 		"https://en.wikipedia.org/wiki/CSS",
 		"https://en.wikipedia.org/wiki/Unix",
+		"https://en.wikipedia.org/wiki/Node.js",
 		"https://en.wikipedia.org/wiki/Computer_science",
 		"https://en.wikipedia.org/wiki/Programmer",
 		"https://en.wikipedia.org/wiki/Software",
@@ -64,7 +65,7 @@ func main() {
 	}
 	fmt.Println("Starting crawler...")
 	go index.Run()
-	time.Sleep(60 * time.Second * 10)
+	time.Sleep(60 * time.Second * 60)
 	cancel()
 	wg.Wait()
 }

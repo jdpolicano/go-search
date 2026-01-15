@@ -19,7 +19,7 @@ type CrawlQueue struct {
 }
 
 func NewCrawlQueue(ctx context.Context, cancel context.CancelFunc, q queue.Queue[store.FrontierItem], wg *sync.WaitGroup) *CrawlQueue {
-	in, out := make(chan []store.FrontierItem, 100), make(chan CrawlerMessage, 100)
+	in, out := make(chan []store.FrontierItem), make(chan CrawlerMessage)
 	return &CrawlQueue{q, in, out, wg, ctx, cancel}
 }
 

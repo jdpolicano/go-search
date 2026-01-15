@@ -1,31 +1,24 @@
 package extract
 
 import (
+	"crypto"
 	"fmt"
 
 	"golang.org/x/net/html"
 )
 
 type Extracted struct {
-	Links           []string
-	TermFreqs       map[string]int
-	NormalizedWords []string
-	Len             int
-}
-
-func NewExtracted(links []string, termFreqs map[string]int, wordsNorm []string) Extracted {
-	return Extracted{
-		Links:           links,
-		TermFreqs:       termFreqs,
-		NormalizedWords: wordsNorm,
-		Len:             len(wordsNorm),
-	}
+	Links     []string
+	TermFreqs map[string]int
+	Hash      string
+	Len       int
 }
 
 func ProcessHtmlDocument(root *html.Node) (Extracted, error) {
 	links := make([]string, 0)
 	termFreqs := make(map[string]int)
-	normWords := make([]string, 0)
+	hash := crypto.SHA256.New()
+	len := 0
 	dfsErr := DfsNodes(root, func(node *html.Node) error {
 		if isATag(node) {
 			for _, attr := range node.Attr {
@@ -43,8 +36,9 @@ func ProcessHtmlDocument(root *html.Node) (Extracted, error) {
 			}
 
 			for _, word := range words {
-				normWords = append(normWords, word)
+				hash.Write([]byte(word))
 				termFreqs[word] += 1
+				len += 1
 			}
 		}
 
@@ -56,5 +50,10 @@ func ProcessHtmlDocument(root *html.Node) (Extracted, error) {
 		return Extracted{}, dfsErr
 	}
 
-	return NewExtracted(links, termFreqs, normWords), nil
+	return Extracted{
+		Links:     links,
+		TermFreqs: termFreqs,
+		Hash:      fmt.Sprintf("%x", hash.Sum(nil)),
+		Len:       len,
+	}, nil
 }

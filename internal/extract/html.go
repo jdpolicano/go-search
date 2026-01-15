@@ -85,42 +85,8 @@ func (p *HtmlParser) isSupportedLanguageNode(node *html.Node) bool {
 	return true // again, we don't know for sure, so we should default to true
 }
 
-func GetLinks(n *html.Node) []string {
-	links := make([]string, 0, 128)
-	seen := make(map[string]bool)
-	DfsNodes(n, func(a *html.Node) error {
-		for _, attr := range a.Attr {
-			if attr.Key == "href" {
-				if _, alreadySeen := seen[attr.Val]; !alreadySeen {
-					links = append(links, attr.Val)
-					seen[attr.Val] = true
-				}
-			}
-		}
-		return nil
-	})
-	return links
-}
-
 func isATag(node *html.Node) bool {
 	return node.Type == html.ElementNode && node.DataAtom == atom.A
-}
-
-func NewTextNodeReader(n *html.Node) io.Reader {
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		DfsNodes(n, func(textNode *html.Node) error {
-			if !isVisibleText(textNode) {
-				return nil
-			}
-			// todo: should we handle errors here?
-			_, e := pw.Write([]byte(textNode.Data + " "))
-			return e
-		})
-	}()
-
-	return pr
 }
 
 func isVisibleText(n *html.Node) bool {

@@ -7,11 +7,14 @@ CREATE TABLE IF NOT EXISTS terms (
 
 CREATE TABLE IF NOT EXISTS docs (
   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  url TEXT NOT NULL UNIQUE,
-  title TEXT,
-  snippet TEXT,
+  url TEXT NOT NULL UNIQUE, -- The full url to the resource
+  domain TEXT NOT NULL, -- The domain of this document
+  hash TEXT NOT NULL, -- The hash of the text content at the time this doc was scraped
   len INTEGER NOT NULL, -- number of terms in the document
-  norm REAL -- magnitude (vector length) for normalization
+  title TEXT, -- optional title to show pretty output to users
+  snippet TEXT, -- optional snippet to show pretty output to users
+  norm REAL, -- magnitude (vector length) for normalization
+  UNIQUE(domain, hash)
 );
 
 CREATE TABLE IF NOT EXISTS postings (
@@ -32,6 +35,7 @@ CREATE TABLE IF NOT EXISTS frontier (
   status INTEGER NOT NULL CHECK(status IN (0, 1, 2, 3)) -- 0: unvisited, 1: in progress, 2: complete 3: failed
 );
 
+CREATE INDEX IF NOT EXISTS idx_docs_domain_hash ON docs(domain);
 CREATE INDEX IF NOT EXISTS idx_frontier_status ON frontier(status);
 CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term_id);
 CREATE INDEX IF NOT EXISTS idx_postings_doc ON postings(doc_id);

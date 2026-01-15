@@ -22,7 +22,7 @@ type Crawler struct {
 }
 
 func NewCrawler(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan CrawlerMessage, wg *sync.WaitGroup) *Crawler {
-	out := make(chan ProcessorMessage, 100)
+	out := make(chan ProcessorMessage)
 	return &Crawler{in, out, wg, s, ctx, cancel}
 }
 
@@ -40,12 +40,14 @@ func (c *Crawler) Run() {
 				c.cancel()
 				return
 			}
+
 			fmt.Println("Crawler handling url: ", cm.fi.Url)
 			ioReader, ioErr := GetReaderFromUrl(cm.fi.Url)
 			if ioErr != nil {
 				c.handleIoError(cm, ioErr)
 				continue
 			}
+
 			c.out <- ProcessorMessage{cm.fi, ioReader}
 		}
 	}
@@ -53,20 +55,26 @@ func (c *Crawler) Run() {
 
 func (c *Crawler) handleIoError(cm CrawlerMessage, err error) {
 	fmt.Printf("Error getting reader for %s\n", cm.fi.Url)
-	conn, err := c.s.Pool.Acquire(c.ctx)
-	if err != nil {
-		fmt.Printf("Error acquiring connection to update status for %s: %s\n", cm.fi.UrlNorm, err)
-		return
-	}
-	defer conn.Release()
-	e := store.UpdateFIStatus(c.ctx, conn, cm.fi.UrlNorm, store.StatusFailed)
-	if e != nil {
-		fmt.Printf("Error updating status to failed for %s: %s\n", cm.fi.UrlNorm, e)
-	}
+	c.updateItemStatus(cm.fi.UrlNorm, store.StatusFailed)
 }
 
 func (c *Crawler) Close() {
 	fmt.Println("Closing crawler")
 	close(c.out)
 	c.wg.Done()
+}
+
+func (c *Crawler) updateItemStatus(urlNorm string, status store.FrontierStatusEnum) error {
+	conn, err := c.s.Pool.Acquire(c.ctx)
+	if err != nil {
+		fmt.Printf("Error acquiring connection to update status for %s: %s\n", urlNorm, err)
+		return err
+	}
+	defer conn.Release()
+	err = store.UpdateFIStatus(c.ctx, conn, urlNorm, status)
+	if err != nil {
+		fmt.Printf("Error updating status for %s: %s\n", urlNorm, err)
+		return err
+	}
+	return nil
 }

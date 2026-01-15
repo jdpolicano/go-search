@@ -28,7 +28,7 @@ type Processor struct {
 }
 
 func NewProcessor(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan ProcessorMessage, queue chan []store.FrontierItem, langs []language.Language, wg *sync.WaitGroup) *Processor {
-	index := make(chan IndexMessage, 100)
+	index := make(chan IndexMessage)
 	parser := extract.NewHtmlParser(langs)
 	return &Processor{in, queue, index, wg, parser, s, ctx, cancel}
 }
@@ -88,14 +88,12 @@ func (p *Processor) handleError(pm ProcessorMessage, err error) {
 	}
 }
 
-func (p *Processor) getIndexMessage(pm ProcessorMessage, extracted extract.Extracted) IndexMessage {
-	return IndexMessage{
-		entry: store.IndexEntry{
-			Url:       pm.fi.Url,
-			Len:       extracted.Len,
-			TermFreqs: extracted.TermFreqs,
-		},
-	}
+func (p *Processor) getIndexEntry(pm ProcessorMessage, extracted extract.Extracted) (store.IndexEntry, error) {
+	url := pm.fi.Url
+	hash := extracted.Hash
+	len := extracted.Len
+	termFreqs := extracted.TermFreqs
+	return store.NewIndexEntry(url, hash, len, termFreqs)
 }
 
 func (p *Processor) getFrontierMessages(pc ProcessorMessage, links []string) []store.FrontierItem {
@@ -114,12 +112,16 @@ func (p *Processor) getFrontierMessages(pc ProcessorMessage, links []string) []s
 }
 
 func (p *Processor) sendToIndex(pm ProcessorMessage, extracted extract.Extracted, wg *sync.WaitGroup) error {
-	msg := p.getIndexMessage(pm, extracted)
+	entry, err := p.getIndexEntry(pm, extracted)
+	if err != nil {
+		return err
+	}
+	msg := IndexMessage{entry: entry}
 	select {
 	case <-p.ctx.Done():
 		fmt.Println("Processor context done, not sending to index")
 	case p.index <- msg:
-		fmt.Printf("Processor sent %d words to index from %s\n", extracted.Len, pm.fi.Url)
+		fmt.Printf("Processor sent %s to index\n", pm.fi.Url)
 	}
 	wg.Done()
 	return nil

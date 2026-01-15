@@ -3,15 +3,20 @@ package store
 import (
 	"context"
 	"errors"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // upsert a doc with a dummy update to get doc_id on conflict
 // in the future we might want to update title/snippet if they change
-const insertDocStmt = `INSERT INTO docs (url, len)
-VALUES ($1, $2)
+const insertDocStmt = `INSERT INTO docs (url, domain, hash, len)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (url) DO UPDATE SET
 	len = EXCLUDED.len -- just update length on conflict to keep it up to date and ensure we get an id back
 RETURNING id;`
+
+// checks if there will be a conflict in the docs table based on a hash and domain
+const checkDocConflictStmt = `SELECT id FROM docs WHERE domain = $1 AND hash = $2;`
 
 // insert each term frequency for a document, and update the term frequencies if they already exist
 const insertTermsStmt = `INSERT INTO terms (raw) SELECT unnest($1::text[])
@@ -30,12 +35,31 @@ SET tf_raw = EXCLUDED.tf_raw;`
 type IndexEntry struct {
 	Url       string
 	UrlNorm   string
+	Domain    string
+	Hash      string
 	Len       int
 	TermFreqs map[string]int // term -> frequency map
 }
 
-func NewIndexEntry(url, url_norm string, len int, termFreqs map[string]int) IndexEntry {
-	return IndexEntry{url, url_norm, len, termFreqs}
+func NewIndexEntry(url, hash string, len int, termFreqs map[string]int) (IndexEntry, error) {
+	urlNorm, e := NormalizeURL(url)
+	if e != nil {
+		return IndexEntry{}, e // fallback to raw url if normalization fails
+	}
+
+	domain, e := GetHostame(url)
+	if e != nil {
+		return IndexEntry{}, e
+	}
+
+	return IndexEntry{
+		Url:       url,
+		UrlNorm:   urlNorm,
+		Domain:    domain,
+		Hash:      hash,
+		Len:       len,
+		TermFreqs: termFreqs,
+	}, nil
 }
 
 /*
@@ -48,7 +72,7 @@ func NewIndexEntry(url, url_norm string, len int, termFreqs map[string]int) Inde
  * In the database
  */
 func IndexDocumentInit(ctx context.Context, db DBTX, doc IndexEntry) error {
-	docId, err := insertDocumentInfo(ctx, db, doc.Url, doc.Len)
+	docId, err := insertDocumentInfo(ctx, db, doc.Url, doc.Domain, doc.Hash, doc.Len)
 	if err != nil {
 		return errors.New("failed to insert document info " + err.Error())
 	}
@@ -70,10 +94,34 @@ func IndexDocumentInit(ctx context.Context, db DBTX, doc IndexEntry) error {
  * Inserts a document and returns the id of the document.
  * If the document already exists, it returns the existing id, but updates the length.
  */
-func insertDocumentInfo(ctx context.Context, db DBTX, url string, len int) (int64, error) {
-	var doc_id int64
-	err := db.QueryRow(ctx, insertDocStmt, url, len).Scan(&doc_id)
+func insertDocumentInfo(ctx context.Context, db DBTX, url, domain, hash string, len int) (doc_id int64, err error) {
+	hasConflict, err := hasDomainHashConflict(ctx, db, domain, hash)
+	if err != nil {
+		return -1, err
+	}
+
+	if hasConflict {
+		return -1, errors.New("document with same hash already exists for this domain")
+	}
+
+	err = db.QueryRow(ctx, insertDocStmt, url, domain, hash, len).Scan(&doc_id)
 	return doc_id, err
+}
+
+/**
+ * Checks if a document with the same hash and domain already exists.
+ * If it does, it returns true
+ */
+func hasDomainHashConflict(ctx context.Context, db DBTX, domain, hash string) (bool, error) {
+	var doc_id int64
+	err := db.QueryRow(ctx, checkDocConflictStmt, domain, hash).Scan(&doc_id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 /**

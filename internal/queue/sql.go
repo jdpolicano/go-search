@@ -42,22 +42,8 @@ func (q *SqlFrontierQueue) Enqueue(items ...store.FrontierItem) error {
 		return err
 	}
 	defer conn.Release()
-
-	items, err = store.InsertFIBatch(q.ctx, conn, items)
-	if err != nil {
-		return err
-	}
-
-	if len(q.buffer) < q.bufSize {
-		// space left in buffer
-		spaceLeft := q.bufSize - len(q.buffer)
-		// only add up to space left
-		end := min(len(items), spaceLeft)
-		// add items to buffer
-		q.buffer = append(q.buffer, items[:end]...)
-	}
-
-	return nil
+	_, err = store.InsertFIBatch(q.ctx, conn, items)
+	return err
 }
 
 func (q *SqlFrontierQueue) Dequeue() (store.FrontierItem, error) {
@@ -67,6 +53,7 @@ func (q *SqlFrontierQueue) Dequeue() (store.FrontierItem, error) {
 		}
 	}
 
+	// Acquire a connection so we can mark the item as in-progress before returning it.
 	conn, err := q.s.Pool.Acquire(q.ctx)
 	if err != nil {
 		return store.FrontierItem{}, err
@@ -74,10 +61,9 @@ func (q *SqlFrontierQueue) Dequeue() (store.FrontierItem, error) {
 	defer conn.Release()
 
 	item := q.buffer[0]
-	item.Status = store.StatusInProgress
-	e := store.UpdateFIStatus(q.ctx, conn, item.UrlNorm, item.Status)
 	q.buffer = q.buffer[1:]
-	return item, e
+
+	return item, nil
 }
 
 func (q *SqlFrontierQueue) Len() (int, error) {
@@ -108,6 +94,8 @@ func (q *SqlFrontierQueue) refill() error {
 	if err != nil {
 		return err
 	}
+	// ensure the connection is released even if we return early
+	defer conn.Release()
 
 	rows, err := store.GetFIByStatusDepthSorted(q.ctx, conn, store.StatusUnvisited, q.bufSize)
 	if err != nil {
@@ -130,4 +118,22 @@ func (q *SqlFrontierQueue) refill() error {
 
 	q.buffer = append(q.buffer, items...)
 	return nil
+}
+
+func (q *SqlFrontierQueue) insertSeeds(seeds []string) error {
+	conn, err := q.s.Pool.Acquire(q.ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	items := make([]store.FrontierItem, 0, len(seeds))
+	for _, seed := range seeds {
+		item, err := store.NewFrontierItemFromSeed(seed)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+	_, err = store.InsertFIBatch(q.ctx, conn, items)
+	return err
 }

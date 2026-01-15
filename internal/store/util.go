@@ -81,3 +81,11 @@ func NormalizeURL(rawURL string) (string, error) {
 
 	return u.String(), nil
 }
+
+func GetHostame(rawUrl string) (string, error) {
+	u, err := url.Parse(rawUrl)
+	if err != nil {
+		return "", err
+	}
+	return u.Hostname(), nil
+}
