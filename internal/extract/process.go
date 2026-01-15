@@ -3,7 +3,7 @@ package extract
 
 import (
 	"crypto"
-	"fmt"
+	"encoding/hex"
 
 	"golang.org/x/net/html"
 )
@@ -39,7 +39,6 @@ func ProcessHtmlDocument(root *html.Node) (Extracted, error) {
 		if isVisibleText(node) {
 			words, scanErr := ScanWordsFromString(node.Data)
 			if scanErr != nil {
-				fmt.Printf("Error scanning words: %s\n", scanErr)
 				return scanErr
 			}
 
@@ -55,14 +54,13 @@ func ProcessHtmlDocument(root *html.Node) (Extracted, error) {
 	})
 
 	if dfsErr != nil {
-		fmt.Printf("Error during DFS of HTML nodes: %s\n", dfsErr)
 		return Extracted{}, dfsErr
 	}
 
 	return Extracted{
 		Links:     links,
 		TermFreqs: termFreqs,
-		Hash:      fmt.Sprintf("%x", hash.Sum(nil)),
+		Hash:      hex.EncodeToString(hash.Sum(nil)),
 		Len:       len,
 	}, nil
 }

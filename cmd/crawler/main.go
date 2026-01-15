@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/jdpolicano/go-search/internal/crawler"
 	"github.com/jdpolicano/go-search/internal/extract/language"
+	"github.com/jdpolicano/go-search/internal/logging"
 	"github.com/jdpolicano/go-search/internal/store"
 )
 
 func main() {
+	logger := logging.NewLogger(slog.LevelInfo)
+
 	// // Load the .env file
 	// err := godotenv.Load()
 	// if err != nil {
@@ -21,7 +24,7 @@ func main() {
 
 	s, err := store.NewStore("db/store.db")
 	if err != nil {
-		fmt.Printf("Error creating store: %s\n", err)
+		logger.Error("Error creating store", "error", err)
 		return
 	}
 	seeds := []string{
@@ -58,12 +61,12 @@ func main() {
 	wg := sync.WaitGroup{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	index, err := crawler.NewIndex(ctx, cancel, s, seeds, supportedLangs, &wg)
+	index, err := crawler.NewIndex(ctx, cancel, s, seeds, supportedLangs, &wg, logger)
 	if err != nil {
-		fmt.Println(err)
+		logger.Error("Error creating index", "error", err)
 		return
 	}
-	fmt.Println("Starting crawler...")
+	logger.Info("Starting crawler...")
 	go index.Run()
 	time.Sleep(60 * time.Second * 60) // run for 60 minutes
 	cancel()

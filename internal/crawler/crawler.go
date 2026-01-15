@@ -4,7 +4,7 @@ package crawler
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/jdpolicano/go-search/internal/store"
@@ -24,12 +24,13 @@ type Crawler struct {
 	s      store.Store           // Database store for status updates
 	ctx    context.Context       // Context for cancellation
 	cancel context.CancelFunc    // Cancel function for stopping the crawler
+	logger *slog.Logger          // Structured logger
 }
 
 // NewCrawler creates a new Crawler instance with the given configuration.
-func NewCrawler(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan CrawlerMessage, wg *sync.WaitGroup) *Crawler {
+func NewCrawler(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan CrawlerMessage, wg *sync.WaitGroup, logger *slog.Logger) *Crawler {
 	out := make(chan ProcessorMessage)
-	return &Crawler{in, out, wg, s, ctx, cancel}
+	return &Crawler{in, out, wg, s, ctx, cancel, logger}
 }
 
 // Run starts the crawler's main loop, processing URLs from the input channel.
@@ -40,16 +41,16 @@ func (c *Crawler) Run() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			fmt.Println("Crawler work canceled, returning")
+			c.logger.Info("Crawler work canceled, returning")
 			return
 		case cm, ok := <-c.in:
 			if !ok {
-				fmt.Println("Crawler \"in\" channel closed, returning")
+				c.logger.Info("Crawler \"in\" channel closed, returning")
 				c.cancel()
 				return
 			}
 
-			fmt.Println("Crawler handling url: ", cm.fi.Url)
+			c.logger.Debug("Crawler handling url", "url", cm.fi.Url)
 			ioReader, ioErr := getReaderFromUrl(cm.fi.Url)
 			if ioErr != nil {
 				c.handleIoError(cm, ioErr)
@@ -63,13 +64,13 @@ func (c *Crawler) Run() {
 
 // handleIoError handles I/O errors that occur during URL fetching.
 func (c *Crawler) handleIoError(cm CrawlerMessage, err error) {
-	fmt.Printf("Error getting reader for %s\n", cm.fi.Url)
+	c.logger.Error("Error getting reader for URL", "url", cm.fi.Url, "error", err)
 	c.updateItemStatus(cm.fi.UrlNorm, store.StatusFailed)
 }
 
 // Close gracefully shuts down the crawler by closing channels and signaling completion.
 func (c *Crawler) Close() {
-	fmt.Println("Closing crawler")
+	c.logger.Info("Closing crawler")
 	close(c.out)
 	c.wg.Done()
 }
@@ -78,13 +79,13 @@ func (c *Crawler) Close() {
 func (c *Crawler) updateItemStatus(urlNorm string, status store.FrontierStatusEnum) error {
 	conn, err := c.s.Pool.Acquire(c.ctx)
 	if err != nil {
-		fmt.Printf("Error acquiring connection to update status for %s: %s\n", urlNorm, err)
+		c.logger.Error("Error acquiring connection to update status", "url", urlNorm, "error", err)
 		return err
 	}
 	defer conn.Release()
 	err = store.UpdateFIStatus(c.ctx, conn, urlNorm, status)
 	if err != nil {
-		fmt.Printf("Error updating status for %s: %s\n", urlNorm, err)
+		c.logger.Error("Error updating status", "url", urlNorm, "status", status, "error", err)
 		return err
 	}
 	return nil
