@@ -3,8 +3,8 @@ package crawler
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 
 	"github.com/jdpolicano/go-search/internal/extract"
@@ -29,13 +29,14 @@ type Processor struct {
 	s      store.Store               // Database store
 	ctx    context.Context           // Context for cancellation
 	cancel context.CancelFunc        // Cancel function for stopping the processor
+	logger *slog.Logger              // Structured logger
 }
 
 // NewProcessor creates a new Processor instance with the given configuration.
-func NewProcessor(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan ProcessorMessage, queue chan []store.FrontierItem, langs []language.Language, wg *sync.WaitGroup) *Processor {
+func NewProcessor(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan ProcessorMessage, queue chan []store.FrontierItem, langs []language.Language, wg *sync.WaitGroup, logger *slog.Logger) *Processor {
 	index := make(chan IndexMessage)
 	parser := extract.NewHtmlParser(langs)
-	return &Processor{in, queue, index, wg, parser, s, ctx, cancel}
+	return &Processor{in, queue, index, wg, parser, s, ctx, cancel, logger}
 }
 
 // Run starts the processor's main loop, handling incoming content from the crawler.
@@ -44,11 +45,11 @@ func (p *Processor) Run() {
 	for {
 		select {
 		case <-p.ctx.Done():
-			fmt.Println("processor work canceled, quitting")
+			p.logger.Info("processor work canceled, quitting")
 			return
 		case pc, ok := <-p.in:
 			if !ok {
-				fmt.Println("Processor \"in\" channel closed")
+				p.logger.Info("Processor \"in\" channel closed")
 				p.cancel()
 				return
 			}
@@ -86,16 +87,16 @@ func (p *Processor) processMessage(pm ProcessorMessage) {
 
 // handleError processes errors that occur during content processing.
 func (p *Processor) handleError(pm ProcessorMessage, err error) {
-	fmt.Printf("%s: %s\n", pm.fi.Url, err)
+	p.logger.Error("Content processing error", "url", pm.fi.Url, "error", err)
 	conn, e := p.s.Pool.Acquire(p.ctx)
 	if e != nil {
-		fmt.Printf("Error acquiring connection to update status for %s: %s\n", pm.fi.UrlNorm, e)
+		p.logger.Error("Error acquiring connection to update status", "url", pm.fi.UrlNorm, "error", e)
 		return
 	}
 	defer conn.Release()
 	e = store.UpdateFIStatus(p.ctx, conn, pm.fi.UrlNorm, store.StatusFailed)
 	if e != nil {
-		fmt.Printf("Error updating status to failed for %s: %s\n", pm.fi.UrlNorm, e)
+		p.logger.Error("Error updating status to failed", "url", pm.fi.UrlNorm, "error", e)
 	}
 }
 
@@ -114,7 +115,7 @@ func (p *Processor) getFrontierMessages(pc ProcessorMessage, links []string) []s
 	for _, link := range links {
 		item, err := store.NewFrontierItemFromParent(pc.fi, link)
 		if err != nil {
-			fmt.Println(err)
+			p.logger.Warn("Error creating frontier item from link", "url", pc.fi.Url, "link", link, "error", err)
 			continue
 		}
 		items = append(items, item)
@@ -132,9 +133,9 @@ func (p *Processor) sendToIndex(pm ProcessorMessage, extracted extract.Extracted
 	msg := IndexMessage{entry: entry}
 	select {
 	case <-p.ctx.Done():
-		fmt.Println("Processor context done, not sending to index")
+		p.logger.Info("Processor context done, not sending to index")
 	case p.index <- msg:
-		fmt.Printf("Processor sent %s to index\n", pm.fi.Url)
+		p.logger.Info("Processor sent to index", "url", pm.fi.Url)
 	}
 	wg.Done()
 	return nil
@@ -145,16 +146,16 @@ func (p *Processor) sendToQueue(pm ProcessorMessage, ex extract.Extracted, wg *s
 	msgs := p.getFrontierMessages(pm, ex.Links)
 	select {
 	case <-p.ctx.Done():
-		fmt.Println("Processor context done, not sending to queue")
+		p.logger.Info("Processor context done, not sending to queue")
 	case p.queue <- msgs:
-		fmt.Printf("Processor sent %d new urls to queue from %s\n", len(msgs), pm.fi.Url)
+		p.logger.Info("Processor sent new URLs to queue", "url", pm.fi.Url, "count", len(msgs))
 	}
 	wg.Done()
 }
 
 // Close gracefully shuts down the processor by closing channels and signaling completion.
 func (p *Processor) Close() {
-	fmt.Println("Closing Processor")
+	p.logger.Info("Closing Processor")
 	close(p.queue)
 	close(p.index)
 	p.wg.Done()

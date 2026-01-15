@@ -3,7 +3,7 @@ package crawler
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/jdpolicano/go-search/internal/queue"
@@ -19,12 +19,13 @@ type CrawlQueue struct {
 	wg     *sync.WaitGroup                 // WaitGroup for goroutine management
 	ctx    context.Context                 // Context for cancellation
 	cancel context.CancelFunc              // Cancel function for stopping the queue
+	logger *slog.Logger                    // Structured logger
 }
 
 // NewCrawlQueue creates a new CrawlQueue instance with the given configuration.
-func NewCrawlQueue(ctx context.Context, cancel context.CancelFunc, q queue.Queue[store.FrontierItem], wg *sync.WaitGroup) *CrawlQueue {
+func NewCrawlQueue(ctx context.Context, cancel context.CancelFunc, q queue.Queue[store.FrontierItem], wg *sync.WaitGroup, logger *slog.Logger) *CrawlQueue {
 	in, out := make(chan []store.FrontierItem), make(chan CrawlerMessage)
-	return &CrawlQueue{q, in, out, wg, ctx, cancel}
+	return &CrawlQueue{q, in, out, wg, ctx, cancel, logger}
 }
 
 // Run starts the crawl queue's main loop, managing URL dequeuing and enqueuing.
@@ -43,7 +44,7 @@ func (cq *CrawlQueue) Run() {
 
 		select {
 		case <-cq.ctx.Done():
-			fmt.Println("CrawlQueue work canceled, returning")
+			cq.logger.Info("CrawlQueue work canceled, returning")
 			return
 		case activeOut <- top:
 			cq.handleOutgoingMessage(top)
@@ -64,7 +65,7 @@ func (cq *CrawlQueue) prepareNextMessage() (chan CrawlerMessage, CrawlerMessage,
 	if err == queue.ErrorFrontierEmpty {
 		return nil, CrawlerMessage{}, nil
 	} else if err != nil {
-		fmt.Printf("Error dequeueing url: %s\n", err)
+		cq.logger.Error("Error dequeueing url", "error", err)
 		return nil, CrawlerMessage{}, err
 	}
 
@@ -75,17 +76,17 @@ func (cq *CrawlQueue) prepareNextMessage() (chan CrawlerMessage, CrawlerMessage,
 
 // handleOutgoingMessage handles logging for outgoing messages to the crawler.
 func (cq *CrawlQueue) handleOutgoingMessage(top CrawlerMessage) {
-	fmt.Printf("Starting %s\n", top.fi.Url)
+	cq.logger.Debug("Starting URL processing", "url", top.fi.Url)
 }
 
 // handleInputChannelClosed handles the case when the input channel is closed.
 func (cq *CrawlQueue) handleInputChannelClosed() {
-	fmt.Println("Queue input channel closed")
+	cq.logger.Info("Queue input channel closed")
 	l, err := cq.queue.Len()
 	if err != nil {
-		fmt.Printf("Error getting length of queue: %s\n", err)
+		cq.logger.Error("Error getting length of queue", "error", err)
 	} else {
-		fmt.Printf("Final queue length: %d\n", l)
+		cq.logger.Info("Final queue length", "length", l)
 	}
 }
 
@@ -95,7 +96,7 @@ func (cq *CrawlQueue) enqueueItems(items []store.FrontierItem) {
 		err := cq.queue.Enqueue(item)
 		if err != nil {
 			if !store.ErrorIsUniqueViolation(err) {
-				fmt.Printf("Error enqueueing url %s: %s\n", item.Url, err)
+				cq.logger.Error("Error enqueueing url", "url", item.Url, "error", err)
 			}
 			continue
 		}
@@ -104,9 +105,9 @@ func (cq *CrawlQueue) enqueueItems(items []store.FrontierItem) {
 
 // Close gracefully shuts down the crawl queue by closing the underlying queue and channels.
 func (cq *CrawlQueue) Close() {
-	fmt.Println("Closing UrlQueue")
+	cq.logger.Info("Closing UrlQueue")
 	if err := cq.queue.Close(); err != nil {
-		fmt.Printf("Error closing queue: %s\n", err)
+		cq.logger.Error("Error closing queue", "error", err)
 	}
 	close(cq.out)
 	cq.wg.Done()

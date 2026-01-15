@@ -3,7 +3,7 @@ package crawler
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/jdpolicano/go-search/internal/extract/language"
@@ -27,11 +27,12 @@ type Index struct {
 	s         store.Store        // Database store
 	ctx       context.Context    // Context for cancellation
 	cancel    context.CancelFunc // Cancel function for stopping the workflow
+	logger    *slog.Logger       // Structured logger
 }
 
 // NewIndex creates a new Index instance with the given configuration.
 // It sets up the entire crawling pipeline and initializes seed URLs.
-func NewIndex(ctx context.Context, cancel context.CancelFunc, s store.Store, seeds []string, langs []language.Language, wg *sync.WaitGroup) (*Index, error) {
+func NewIndex(ctx context.Context, cancel context.CancelFunc, s store.Store, seeds []string, langs []language.Language, wg *sync.WaitGroup, logger *slog.Logger) (*Index, error) {
 	// Create SQL-based queue with capacity of 500
 	sqlQueue, err := queue.NewSqlQueue(ctx, s, 500, seeds)
 	if err != nil {
@@ -44,23 +45,23 @@ func NewIndex(ctx context.Context, cancel context.CancelFunc, s store.Store, see
 		if err == nil {
 			sqlQueue.Enqueue(fi)
 		} else {
-			fmt.Printf("Error creating frontier item from seed %s: %s\n", seed, err)
+			logger.Error("Error creating frontier item from seed", "seed", seed, "error", err)
 		}
 	}
 
 	// Set up the crawling pipeline
-	queue := NewCrawlQueue(ctx, cancel, sqlQueue, wg)
-	crawler := NewCrawler(ctx, cancel, s, queue.out, wg)
-	processor := NewProcessor(ctx, cancel, s, crawler.out, queue.in, langs, wg)
+	queue := NewCrawlQueue(ctx, cancel, sqlQueue, wg, logger)
+	crawler := NewCrawler(ctx, cancel, s, queue.out, wg, logger)
+	processor := NewProcessor(ctx, cancel, s, crawler.out, queue.in, langs, wg, logger)
 	in := processor.index
-	return &Index{queue, crawler, processor, in, wg, s, ctx, cancel}, nil
+	return &Index{queue, crawler, processor, in, wg, s, ctx, cancel, logger}, nil
 }
 
 // Run starts the indexing workflow by initializing all components and processing index entries.
 func (idx *Index) Run() {
 	idx.startWorkflow()
 	idx.firstPassage()
-	fmt.Println("run finished")
+	idx.logger.Info("Index run finished")
 }
 
 // firstPassage processes index entries from the input channel and stores them in the database.
@@ -70,11 +71,11 @@ func (idx *Index) firstPassage() {
 	for {
 		select {
 		case <-idx.ctx.Done():
-			fmt.Println("Index work canceled, returning")
+			idx.logger.Info("Index work canceled, returning")
 			return
 		case im, ok := <-idx.in:
 			if !ok {
-				fmt.Println("Index \"in\" channel closed, returning")
+				idx.logger.Info("Index \"in\" channel closed, returning")
 				idx.cancel() // cancel the whole workflow if it hasn't already.
 				return
 			}
@@ -109,23 +110,23 @@ func (idx *Index) firstPassage() {
 				continue
 			}
 
-			fmt.Printf("Indexed document %s successfully\n", im.entry.Url)
+			idx.logger.Info("Indexed document successfully", "url", im.entry.Url)
 		}
 	}
 }
 
 // handleError processes errors that occur during indexing by updating the frontier item status.
 func (idx *Index) handleError(im IndexMessage, err error) {
-	fmt.Printf("Error indexing %s: %s\n", im.entry.Url, err)
+	idx.logger.Error("Error indexing document", "url", im.entry.Url, "error", err)
 	conn, e := idx.s.Pool.Acquire(idx.ctx)
 	if e != nil {
-		fmt.Printf("Error acquiring connection to update status for %s: %s\n", im.entry.Url, e)
+		idx.logger.Error("Error acquiring connection to update status", "url", im.entry.Url, "error", e)
 		return
 	}
 	defer conn.Release()
 	e = store.UpdateFIStatus(idx.ctx, conn, im.entry.UrlNorm, store.StatusFailed)
 	if e != nil {
-		fmt.Printf("Error updating status to failed for %s: %s\n", im.entry.UrlNorm, e)
+		idx.logger.Error("Error updating status to failed", "url", im.entry.UrlNorm, "error", e)
 	}
 }
 
@@ -141,7 +142,7 @@ func (idx *Index) startWorkflow() {
 
 // Close gracefully shuts down the index and all its components.
 func (idx *Index) Close() {
-	fmt.Println("Closing main Index process")
+	idx.logger.Info("Closing main Index process")
 	idx.queue.Close() // this should cascade through the pipeline.
 	idx.crawler.Close()
 	idx.processor.Close()

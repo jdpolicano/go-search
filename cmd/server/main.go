@@ -3,10 +3,10 @@
 // Currently not implemented - placeholder for future development.
 package main
 
-import "fmt"
+import "log/slog"
 
 // main is the entry point for the search server.
 // TODO: Implement HTTP server with search endpoints.
 func main() {
-	fmt.Println("not yet implemented")
+	slog.Info("Search server not yet implemented")
 }
