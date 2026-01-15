@@ -65,7 +65,7 @@ func main() {
 	}
 	fmt.Println("Starting crawler...")
 	go index.Run()
-	time.Sleep(60 * time.Second * 60)
+	time.Sleep(60 * time.Second * 60) // run for 60 minutes
 	cancel()
 	wg.Wait()
 }

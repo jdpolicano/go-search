@@ -1,3 +1,4 @@
+// Package extract provides text scanning and word processing utilities.
 package extract
 
 import (
@@ -15,6 +16,7 @@ import (
 var stopWordsData string
 var stopWords = initStopWords()
 
+// initStopWords initializes the stop words map from the embedded file.
 func initStopWords() map[string]any {
 	lines := strings.Split(stopWordsData, "\n")
 	stopWords := make(map[string]any, len(lines))
@@ -27,13 +29,16 @@ func initStopWords() map[string]any {
 	return stopWords
 }
 
+// isAlphaNumericRune checks if a rune is a letter or number.
 func isAlphaNumericRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
+// ScanAlphaNumericWord is a bufio.SplitFunc that scans for alphanumeric words.
+// It skips non-alphanumeric characters and returns the next word in lowercase.
 func ScanAlphaNumericWord(data []byte, isEof bool) (int, []byte, error) {
 	start := 0
-	// skip anything that isn't alphanumeric to begin.
+	// Skip anything that isn't alphanumeric to begin.
 	for start < len(data) {
 		r, size := utf8.DecodeRune(data[start:])
 		if isAlphaNumericRune(r) {
@@ -45,22 +50,24 @@ func ScanAlphaNumericWord(data []byte, isEof bool) (int, []byte, error) {
 	end := start
 	for end < len(data) {
 		r, size := utf8.DecodeRune(data[end:])
-		// we've reached the end of our sequence
+		// We've reached the end of our sequence
 		if !isAlphaNumericRune(r) {
 			return end + size, bytes.ToLower(data[start:end]), nil
 		}
 		end += size
 	}
 
-	// there were alphanum runes
+	// There were alphanumeric runes
 	if start < len(data) {
-		return end, bytes.ToLower(data[start:]), nil
+		return end, bytes.ToLower(data[start:end]), nil
 	}
 
-	// entire string was non-sense
+	// Entire string was non-alphanumeric
 	return end, nil, nil
 }
 
+// ScanWords scans text from an io.Reader and returns filtered words.
+// It removes stop words and integer words, returning lowercase results.
 func ScanWords(reader io.Reader) ([]string, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Split(ScanAlphaNumericWord)
@@ -80,10 +87,12 @@ func ScanWords(reader io.Reader) ([]string, error) {
 	return words, nil
 }
 
+// ScanWordsFromString scans text from a string and returns filtered words.
 func ScanWordsFromString(s string) ([]string, error) {
 	return ScanWords(strings.NewReader(s))
 }
 
+// isIntegerWord checks if a word represents an integer value.
 func isIntegerWord(w string) bool {
 	_, err := strconv.Atoi(w)
 	return err == nil

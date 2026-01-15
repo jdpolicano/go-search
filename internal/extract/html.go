@@ -1,3 +1,4 @@
+// Package extract provides HTML parsing and content extraction functionality for the search engine.
 package extract
 
 import (
@@ -11,16 +12,20 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
+// ErrorNotSupportedLanguage is returned when a document's language is not supported.
 var ErrorNotSupportedLanguage = errors.New("Language is not supported")
 
+// HtmlParser parses HTML documents and validates language support.
 type HtmlParser struct {
-	langs []language.Language
+	langs []language.Language // Supported languages for content extraction
 }
 
+// NewHtmlParser creates a new HtmlParser instance with the given supported languages.
 func NewHtmlParser(langs []language.Language) *HtmlParser {
 	return &HtmlParser{langs}
 }
 
+// Parse parses an HTML document from the given reader and validates language support.
 func (p *HtmlParser) Parse(reader io.Reader) (*html.Node, error) {
 	doc, parseErr := html.Parse(reader)
 	if parseErr != nil {
@@ -34,12 +39,12 @@ func (p *HtmlParser) Parse(reader io.Reader) (*html.Node, error) {
 	return doc, nil
 }
 
-// checks the html tag for a "lang" attribute, and validates (if it is there)
-// whether or not it is a supported language. The default is to say true,
-// so this does not guarrentee that the doc is in a supported language
+// isSupportedLanguageNode checks the html tag for a "lang" attribute and validates language support.
+// The default is to return true, so this does not guarantee that the doc is in a supported language.
 func (p *HtmlParser) isSupportedLanguageNode(node *html.Node) bool {
 	var htmlTagNode *html.Node = nil
 
+	// Find the HTML tag node
 	if node.Type == html.DocumentNode {
 		for c := node.FirstChild; c != nil; c = c.NextSibling {
 			if c.DataAtom == atom.Html {
@@ -52,43 +57,44 @@ func (p *HtmlParser) isSupportedLanguageNode(node *html.Node) bool {
 	}
 
 	if htmlTagNode == nil {
-		// we can't say yet that it is NOT supported.
-		//
-		// in the future we might use natural language processing
-		// to determine the language of the text nodes or something.
+		// We can't determine language support yet.
+		// Future enhancement: use natural language processing to detect language from text content.
 		return true
 	}
 
+	// Check for lang attribute and validate against supported languages
 	for _, attr := range htmlTagNode.Attr {
 		if attr.Key == "lang" {
-			// ISO 639-1 - two language codes
+			// ISO 639-1 - two letter language codes
 			if len(attr.Val) == 2 {
 				isoCode639_1 := language.GetIsoCode639_1FromValue(attr.Val)
 				attrLang := language.GetLanguageFromIsoCode639_1(isoCode639_1)
-				return slices.Contains(p.langs, attrLang) // the lang attribute was there, but it isn't a support lang that we know of.
+				return slices.Contains(p.langs, attrLang)
 			}
 
-			// ISO 639-3 - three language codes
+			// ISO 639-3 - three letter language codes
 			if len(attr.Val) == 3 {
 				isoCode639_3 := language.GetIsoCode639_3FromValue(attr.Val)
 				attrLang := language.GetLanguageFromIsoCode639_3(isoCode639_3)
-				return slices.Contains(p.langs, attrLang) // the lang attribute was there, but it isn't a support lang that we know of.
+				return slices.Contains(p.langs, attrLang)
 			}
 
-			// there is a lang attribute, but we don't know what it is.
-			// again, in the future we might use natural language processing, but for now we will just deny this
-			// document since it clearly specified a lang attribute that we don't understand.
+			// Lang attribute exists but we don't recognize it.
+			// Future enhancement: use NLP to detect language, but for now deny the document.
 			return false
 		}
 	}
 
-	return true // again, we don't know for sure, so we should default to true
+	return true // Default to true when no lang attribute is found
 }
 
+// isATag checks if a node is an HTML anchor (<a>) tag.
 func isATag(node *html.Node) bool {
 	return node.Type == html.ElementNode && node.DataAtom == atom.A
 }
 
+// isVisibleText determines if a text node contains visible content.
+// It filters out script/style content and whitespace-only nodes.
 func isVisibleText(n *html.Node) bool {
 	// 1. Must be a text node
 	if n.Type != html.TextNode {
@@ -104,7 +110,7 @@ func isVisibleText(n *html.Node) bool {
 		}
 	}
 
-	// 3. (Optional) Filter out nodes that are just whitespace (newlines/tabs)
+	// 3. Filter out nodes that are just whitespace (newlines/tabs)
 	if strings.TrimSpace(n.Data) == "" {
 		return false
 	}
@@ -112,6 +118,7 @@ func isVisibleText(n *html.Node) bool {
 	return true
 }
 
+// DfsNodes performs a depth-first traversal of HTML nodes, calling the callback for each node.
 func DfsNodes(n *html.Node, cb func(node *html.Node) error) error {
 	if n == nil {
 		return nil

@@ -1,3 +1,4 @@
+// Package crawler contains network utilities for web crawling.
 package crawler
 
 import (
@@ -6,11 +7,13 @@ import (
 	"net/http"
 )
 
-func GetReaderFromUrl(url string) (io.Reader, error) {
+// GetReaderFromUrl fetches content from a URL and returns it as an io.Reader.
+// It sets appropriate headers and handles HTTP status codes.
+func getReaderFromUrl(url string) (io.Reader, error) {
 	client := &http.Client{}
-	// 1. Create a new request
+	// Create a new request with proper headers
 	req, _ := http.NewRequest("GET", url, nil)
-	// 2. Set a User-Agent header (required by Wikipedia)
+	// Set a User-Agent header (required by Wikipedia and many sites)
 	// Format: <MyBotName>/<Version> (contact information)
 	req.Header.Set("User-Agent", "MyGoScraper/1.0 (jdpolicano@gmail.com)")
 	response, ioErr := client.Do(req)

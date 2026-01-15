@@ -1,3 +1,5 @@
+-- Database cleanup script for go-search engine
+-- Truncates all tables in the public schema while preserving table structures
 DO
 $$
 DECLARE

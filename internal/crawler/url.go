@@ -1,3 +1,4 @@
+// Package crawler contains URL queue management for the web crawler.
 package crawler
 
 import (
@@ -9,20 +10,24 @@ import (
 	"github.com/jdpolicano/go-search/internal/store"
 )
 
+// CrawlQueue manages the URL frontier for the web crawler.
+// It handles enqueuing new URLs and dequeuing URLs for crawling in a breadth-first manner.
 type CrawlQueue struct {
-	queue  queue.Queue[store.FrontierItem]
-	in     chan []store.FrontierItem // data into the queue, for a bfs queue.
-	out    chan CrawlerMessage       // send an item along the queue
-	wg     *sync.WaitGroup
-	ctx    context.Context
-	cancel context.CancelFunc
+	queue  queue.Queue[store.FrontierItem] // Underlying queue implementation
+	in     chan []store.FrontierItem       // Input channel for new URLs (BFS queue)
+	out    chan CrawlerMessage             // Output channel for URLs to crawl
+	wg     *sync.WaitGroup                 // WaitGroup for goroutine management
+	ctx    context.Context                 // Context for cancellation
+	cancel context.CancelFunc              // Cancel function for stopping the queue
 }
 
+// NewCrawlQueue creates a new CrawlQueue instance with the given configuration.
 func NewCrawlQueue(ctx context.Context, cancel context.CancelFunc, q queue.Queue[store.FrontierItem], wg *sync.WaitGroup) *CrawlQueue {
 	in, out := make(chan []store.FrontierItem), make(chan CrawlerMessage)
 	return &CrawlQueue{q, in, out, wg, ctx, cancel}
 }
 
+// Run starts the crawl queue's main loop, managing URL dequeuing and enqueuing.
 func (cq *CrawlQueue) Run() {
 	defer cq.wg.Done()
 	if l, err := cq.queue.Len(); err != nil || l == 0 {
@@ -53,6 +58,7 @@ func (cq *CrawlQueue) Run() {
 	}
 }
 
+// prepareNextMessage prepares the next URL to be sent to the crawler.
 func (cq *CrawlQueue) prepareNextMessage() (chan CrawlerMessage, CrawlerMessage, error) {
 	item, err := cq.queue.Dequeue()
 	if err == queue.ErrorFrontierEmpty {
@@ -67,10 +73,12 @@ func (cq *CrawlQueue) prepareNextMessage() (chan CrawlerMessage, CrawlerMessage,
 	}, nil
 }
 
+// handleOutgoingMessage handles logging for outgoing messages to the crawler.
 func (cq *CrawlQueue) handleOutgoingMessage(top CrawlerMessage) {
 	fmt.Printf("Starting %s\n", top.fi.Url)
 }
 
+// handleInputChannelClosed handles the case when the input channel is closed.
 func (cq *CrawlQueue) handleInputChannelClosed() {
 	fmt.Println("Queue input channel closed")
 	l, err := cq.queue.Len()
@@ -81,6 +89,7 @@ func (cq *CrawlQueue) handleInputChannelClosed() {
 	}
 }
 
+// enqueueItems adds multiple frontier items to the queue, handling unique violations.
 func (cq *CrawlQueue) enqueueItems(items []store.FrontierItem) {
 	for _, item := range items {
 		err := cq.queue.Enqueue(item)
@@ -93,6 +102,7 @@ func (cq *CrawlQueue) enqueueItems(items []store.FrontierItem) {
 	}
 }
 
+// Close gracefully shuts down the crawl queue by closing the underlying queue and channels.
 func (cq *CrawlQueue) Close() {
 	fmt.Println("Closing UrlQueue")
 	if err := cq.queue.Close(); err != nil {

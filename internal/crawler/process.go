@@ -1,3 +1,4 @@
+// Package crawler contains content processing functionality for the search engine.
 package crawler
 
 import (
@@ -11,28 +12,33 @@ import (
 	"github.com/jdpolicano/go-search/internal/store"
 )
 
+// ProcessorMessage represents a message containing fetched web content to be processed.
 type ProcessorMessage struct {
-	fi     store.FrontierItem
-	reader io.Reader
+	fi     store.FrontierItem // Frontier item metadata
+	reader io.Reader          // Fetched content reader
 }
 
+// Processor handles the extraction and processing of web content.
+// It parses HTML, extracts links and text, and coordinates with the queue and index.
 type Processor struct {
-	in     chan ProcessorMessage     // accept incoming pages from the crawler
-	queue  chan []store.FrontierItem // push more urls to the queue pipeline
-	index  chan IndexMessage         // push normalized text input for indexing
-	wg     *sync.WaitGroup
-	parser *extract.HtmlParser
-	s      store.Store
-	ctx    context.Context
-	cancel context.CancelFunc
+	in     chan ProcessorMessage     // Input channel for pages from crawler
+	queue  chan []store.FrontierItem // Output channel for new URLs to queue
+	index  chan IndexMessage         // Output channel for processed content to index
+	wg     *sync.WaitGroup           // WaitGroup for goroutine management
+	parser *extract.HtmlParser       // HTML parser for content extraction
+	s      store.Store               // Database store
+	ctx    context.Context           // Context for cancellation
+	cancel context.CancelFunc        // Cancel function for stopping the processor
 }
 
+// NewProcessor creates a new Processor instance with the given configuration.
 func NewProcessor(ctx context.Context, cancel context.CancelFunc, s store.Store, in chan ProcessorMessage, queue chan []store.FrontierItem, langs []language.Language, wg *sync.WaitGroup) *Processor {
 	index := make(chan IndexMessage)
 	parser := extract.NewHtmlParser(langs)
 	return &Processor{in, queue, index, wg, parser, s, ctx, cancel}
 }
 
+// Run starts the processor's main loop, handling incoming content from the crawler.
 func (p *Processor) Run() {
 	defer p.wg.Done()
 	for {
@@ -51,19 +57,23 @@ func (p *Processor) Run() {
 	}
 }
 
+// processMessage handles a single processor message by parsing HTML and coordinating outputs.
 func (p *Processor) processMessage(pm ProcessorMessage) {
+	// Parse the HTML content
 	doc, parseErr := p.parser.Parse(pm.reader)
 	if parseErr != nil {
 		p.handleError(pm, parseErr)
 		return
 	}
 
+	// Extract text, links, and metadata from the parsed document
 	extracted, err := extract.ProcessHtmlDocument(doc)
 	if err != nil {
 		p.handleError(pm, err)
 		return
 	}
 
+	// Send extracted content to both index and queue concurrently
 	var wg sync.WaitGroup
 	wg.Add(2)
 	// send to index
@@ -74,6 +84,7 @@ func (p *Processor) processMessage(pm ProcessorMessage) {
 	wg.Wait()
 }
 
+// handleError processes errors that occur during content processing.
 func (p *Processor) handleError(pm ProcessorMessage, err error) {
 	fmt.Printf("%s: %s\n", pm.fi.Url, err)
 	conn, e := p.s.Pool.Acquire(p.ctx)
@@ -88,6 +99,7 @@ func (p *Processor) handleError(pm ProcessorMessage, err error) {
 	}
 }
 
+// getIndexEntry creates an index entry from processed content.
 func (p *Processor) getIndexEntry(pm ProcessorMessage, extracted extract.Extracted) (store.IndexEntry, error) {
 	url := pm.fi.Url
 	hash := extracted.Hash
@@ -96,8 +108,8 @@ func (p *Processor) getIndexEntry(pm ProcessorMessage, extracted extract.Extract
 	return store.NewIndexEntry(url, hash, len, termFreqs)
 }
 
+// getFrontierMessages creates frontier items from extracted links for queue processing.
 func (p *Processor) getFrontierMessages(pc ProcessorMessage, links []string) []store.FrontierItem {
-	//time.Sleep(250 * time.Millisecond)
 	items := make([]store.FrontierItem, 0, len(links))
 	for _, link := range links {
 		item, err := store.NewFrontierItemFromParent(pc.fi, link)
@@ -111,6 +123,7 @@ func (p *Processor) getFrontierMessages(pc ProcessorMessage, links []string) []s
 	return items
 }
 
+// sendToIndex sends processed content to the index for storage.
 func (p *Processor) sendToIndex(pm ProcessorMessage, extracted extract.Extracted, wg *sync.WaitGroup) error {
 	entry, err := p.getIndexEntry(pm, extracted)
 	if err != nil {
@@ -127,6 +140,7 @@ func (p *Processor) sendToIndex(pm ProcessorMessage, extracted extract.Extracted
 	return nil
 }
 
+// sendToQueue sends extracted links to the queue for future crawling.
 func (p *Processor) sendToQueue(pm ProcessorMessage, ex extract.Extracted, wg *sync.WaitGroup) {
 	msgs := p.getFrontierMessages(pm, ex.Links)
 	select {
@@ -138,6 +152,7 @@ func (p *Processor) sendToQueue(pm ProcessorMessage, ex extract.Extracted, wg *s
 	wg.Done()
 }
 
+// Close gracefully shuts down the processor by closing channels and signaling completion.
 func (p *Processor) Close() {
 	fmt.Println("Closing Processor")
 	close(p.queue)

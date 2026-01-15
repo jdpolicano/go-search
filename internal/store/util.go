@@ -1,3 +1,4 @@
+// Package store provides utility functions for URL processing and error handling.
 package store
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// ErrorIsUniqueViolation checks if an error represents a PostgreSQL unique constraint violation.
 func ErrorIsUniqueViolation(err error) bool {
 	if err == nil {
 		return false
@@ -45,11 +47,11 @@ func MakeUrl(baseStr string, href string) (string, error) {
 	return resolvedUrl, nil
 }
 
-// Normalizes a URL by:
+// NormalizeURL normalizes a URL by:
 // - Lowercasing the scheme and host
 // - Removing the fragment
 // - Sorting query parameters
-// - Removing trailing slash (if path is not just "/")
+// - Removing trailing slash (if the path is not just "/")
 //
 // This is the primary key for the 'frontier' table that is used to avoid
 // crawling the same URL multiple times.
@@ -74,7 +76,7 @@ func NormalizeURL(rawURL string) (string, error) {
 	}
 	u.RawQuery = query.Encode()
 
-	// Remove trailing slash if path is not just "/"
+	// Remove trailing slash if the path is not just "/"
 	if u.Path != "/" && strings.HasSuffix(u.Path, "/") {
 		u.Path = strings.TrimSuffix(u.Path, "/")
 	}
@@ -82,6 +84,7 @@ func NormalizeURL(rawURL string) (string, error) {
 	return u.String(), nil
 }
 
+// GetHostame extracts the hostname from a URL.
 func GetHostame(rawUrl string) (string, error) {
 	u, err := url.Parse(rawUrl)
 	if err != nil {
