@@ -31,7 +31,7 @@ func initStopWords() map[string]any {
 
 // isAlphaNumericRune checks if a rune is a letter or number.
 func isAlphaNumericRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsNumber(r)
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsDigit(r)
 }
 
 // ScanAlphaNumericWord is a bufio.SplitFunc that scans for alphanumeric words.
