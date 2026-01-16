@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Search Engine</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Go Search Engine</h1>
+            <p>Search the web with BM25 ranking</p>
+        </header>
+
+        <main>
+            <div class="search-container">
+                <form id="searchForm" class="search-form">
+                    <input 
+                        type="text" 
+                        id="searchInput" 
+                        placeholder="Enter your search query..." 
+                        autocomplete="off"
+                        required
+                    >
+                    <button type="submit" id="searchButton">Search</button>
+                </form>
+            </div>
+
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Searching...</p>
+            </div>
+
+            <div id="errorMessage" class="error" style="display: none;"></div>
+
+            <div id="results" class="results" style="display: none;">
+                <div class="results-header">
+                    <span id="resultsCount"></span>
+                </div>
+                <div id="resultsList" class="results-list"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
